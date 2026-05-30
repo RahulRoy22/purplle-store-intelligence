@@ -1,7 +1,71 @@
-shapely>=2.0.0
-numpy>=1.24.0
-opencv-python-headless>=4.8.0
-ultralytics>=8.0.0
+# ==============================================================================
+# services/pipeline/requirements.txt
+#
+# Install inside a virtual environment — see project root README for the
+# exact PowerShell commands.
+#
+# PyTorch index
+# -------------
+# Uncomment exactly ONE --extra-index-url block below to match your hardware.
+# The CPU block is active by default (safe for any machine; ~750 MB download).
+# Switch to a CUDA block if you have an NVIDIA GPU — inference will be 5-10×
+# faster.  Do NOT have two --extra-index-url lines active at the same time.
+#
+#   CPU-only (default — works on all machines):
+--extra-index-url https://download.pytorch.org/whl/cpu
+#
+#   CUDA 11.8  (GTX 10xx / RTX 20xx / 30xx, driver ≥ 452):
+# --extra-index-url https://download.pytorch.org/whl/cu118
+#
+#   CUDA 12.1  (RTX 40xx, driver ≥ 530):
+# --extra-index-url https://download.pytorch.org/whl/cu121
+# ==============================================================================
+
+
+# ── PyTorch core ──────────────────────────────────────────────────────────────
 torch>=2.0.0
+torchvision>=0.15.0
+
+
+# ── Re-identification (OSNet embeddings) ─────────────────────────────────────
+# torchreid is on PyPI but its build requires Cython.
+# pip will install Cython automatically as a build dependency.
 torchreid>=0.2.5
+# tensorboard is an undeclared transitive dependency of torchreid's engine
+# module — torchreid.reid.engine imports torch.utils.tensorboard at the top
+# level even in inference-only usage, so it must be present at import time.
+tensorboard>=2.13.0
+
+
+# ── Object detection + ByteTrack (integrated in ultralytics) ─────────────────
+ultralytics>=8.0.0
+
+
+# ── Computer vision ───────────────────────────────────────────────────────────
+# IMPORTANT: use opencv-python (full GUI build), NOT opencv-python-headless.
+# calibrate.py opens interactive OpenCV windows — headless has no GUI backend
+# and will crash with "cv2.error: (-2:Unspecified error) The function is not
+# implemented" on any cv2.imshow() call.
+# The two packages conflict; never install both in the same environment.
+opencv-python>=4.8.0
+
+
+# ── Zone geometry ─────────────────────────────────────────────────────────────
+shapely>=2.0.0
+
+
+# ── Numerics ──────────────────────────────────────────────────────────────────
+numpy>=1.24.0
+
+
+# ── Async HTTP (IngestClient) ─────────────────────────────────────────────────
 httpx>=0.27.0
+
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest>=8.2.0
+pytest-asyncio>=0.23.6
+pytest-httpx>=0.30.0
+
+gdown>=5.1.0
+

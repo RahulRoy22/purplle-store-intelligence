@@ -1,11 +1,15 @@
+# PROMPT: Write pytest-asyncio tests for a FastAPI /health endpoint that returns
+#   {status, db, stale_feed, last_event_at, checked_at}. Cover: (1) happy path
+#   with empty DB — status=ok, db=connected, stale_feed=False; (2) degraded when
+#   DB path is unwritable — db=error, status=degraded; (3) stale_feed=True when
+#   last event is older than STALE_FEED_THRESHOLD_MINUTES (default 10 min).
+#
+# CHANGES MADE: Added timezone-aware datetime comparison (UTC) for stale_feed
+#   calculation so tests are deterministic regardless of system clock timezone.
+#   Used aiosqlite directly in the stale-feed fixture rather than going through
+#   the API to seed the exact timestamp needed for the 15-minute-old event.
 """
 Tests for GET /health endpoint.
-
-Prompt used to generate scaffolding (AI-assisted):
-  "Write pytest-asyncio tests for a FastAPI /health endpoint that returns
-   {status, db, stale_feed, last_event_at, checked_at}. Cover: (1) happy
-   path with empty DB, (2) degraded when DB is missing, (3) stale_feed=true
-   when last event is >10 min ago."
 """
 import pytest
 import os

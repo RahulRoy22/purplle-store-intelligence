@@ -1,3 +1,12 @@
+# PROMPT: Give me bounding boxes whose midpoints are exact integers and whose
+#   midpoints are not integers, to test centroid computation ((x1+x2)/2,
+#   (y1+y2)/2) in a ByteTrack wrapper. Also test: empty tracker output returns
+#   [], get_active_ids() is empty before first update(), and get_active_ids()
+#   returns only the track_ids from the most recent update().
+#
+# CHANGES MADE: Centroid is computed as (float, float) tuple using midpoint of
+#   xyxy bbox. Added get_active_ids() caching via self._last_track_ids so it
+#   reflects the most-recent frame state without requiring another tracker call.
 """
 Phase 4 Tests — Task 5b: PersonTracker  (RED phase)
 

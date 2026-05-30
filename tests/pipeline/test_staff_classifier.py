@@ -1,3 +1,13 @@
+# PROMPT: Write pytest fixtures for an HSV-based staff uniform classifier.
+#   The classifier returns True when the fraction of pixels matching the HSV
+#   range meets or exceeds a threshold. Cover: solid uniform colour (all pixels
+#   match → True), solid non-uniform colour (0 pixels match → False), partial
+#   uniform at 19%/25%/26% relative to a 25% threshold, all-black crop, and
+#   a 1×1-pixel crop. Verify the return value is Python bool, not np.bool_.
+#
+# CHANGES MADE: return bool() cast added in is_staff() after discovering
+#   numpy comparison returns np.bool_ which fails `is True` identity checks
+#   in test assertions.
 """
 Phase 4 Tests — Task 2: StaffClassifier  (RED phase)
 

@@ -36,10 +36,13 @@ class EventBuilder:
         # camera_id: look up from zone map; fall back to empty string for None zones
         camera_id: str = self._zone_camera_map.get(zone_id, "") if zone_id is not None else ""
 
-        # timestamp: preserve the original tz-aware datetime, serialised as ISO-8601
-        ts: datetime = raw["timestamp"]
+        # timestamp: accept both datetime objects and pre-serialised ISO-8601 strings.
+        # state_machine._evt() already calls frame_ts.isoformat(), so the value
+        # arriving here is a str. Tests pass datetime objects directly.
+        ts = raw["timestamp"]
+        if isinstance(ts, str):
+            ts = datetime.fromisoformat(ts)
         if ts.tzinfo is None:
-            # Normalise naive datetimes to UTC rather than crashing
             ts = ts.replace(tzinfo=timezone.utc)
         timestamp_str: str = ts.isoformat()
 

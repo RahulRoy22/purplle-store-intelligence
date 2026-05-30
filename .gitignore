@@ -1,10 +1,59 @@
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment / secrets
 .env
-data/generated/
-*.db
+
+# Test artefacts
 .pytest_cache/
 .coverage
 htmlcov/
+.tox/
+
+# Build / packaging
 dist/
+build/
 *.egg-info/
+*.egg
+
+# ─── Project-specific ────────────────────────────────────────────────────────
+
+# Mock-generated data (reproduced by seed service / generators)
+data/generated/
+
+# Private resources: CCTV footage, real POS data, calibration layouts
+# These contain proprietary footage and organiser data — never commit
+data/resource/
+
+# Video files (anywhere in the tree)
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# ML model weights (large binaries — download via ultralytics auto-download)
+*.pt
+*.onnx
+*.engine
+*.tflite
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
+# Pipeline runtime logs
+logs/
+
+# OS noise
+.DS_Store
+Thumbs.db

@@ -1,3 +1,12 @@
+# PROMPT: Design pytest fixtures for a pixel-coordinate store zone mapper that
+#   uses Shapely polygons. Include: point clearly inside a polygon, point outside
+#   all polygons (None), point on a shared edge (inclusive boundary via covers()),
+#   a zone missing the pixel_polygon key (silently skipped), fractional
+#   coordinates, and both from_layout() dict and from_file() JSON factory.
+#
+# CHANGES MADE: Used Shapely covers() predicate (not contains()) so boundary
+#   points are classified as inside the zone. Degenerate zones with missing
+#   or too-short pixel_polygon lists are skipped at load time with a warning.
 """
 Phase 4 Tests — Task 1: ZoneMapper  (RED phase)
 

@@ -1,3 +1,14 @@
+# PROMPT: Write pytest scenarios for a CCTV track state machine that emits
+#   retail analytics events. Include: REENTRY when caller provides an existing
+#   visitor_id (Re-ID match), dwell_ms accumulation across multiple frames
+#   before zone exit, BILLING_QUEUE_JOIN queue_depth from metadata, rapid zone
+#   switches (enter zone A → zone B without explicit exit emits ZONE_EXIT for A),
+#   flush_exits() for simultaneous vanished tracks, and staff tracks emitting
+#   full event set (filtering is at query time, not here).
+#
+# CHANGES MADE: flush_exits() takes a set of active track IDs and emits EXIT
+#   for every tracked ID not in that set; this handles EOF and KeyboardInterrupt
+#   shutdown paths. Dwell is measured from zone_enter_time to zone_exit frame_ts.
 """
 Phase 4 Tests — Task 3: TrackStateMachine  (RED phase)
 

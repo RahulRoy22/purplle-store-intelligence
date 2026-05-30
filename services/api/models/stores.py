@@ -34,15 +34,17 @@ class HeatZone(BaseModel):
 class HeatmapReport(BaseModel):
     store_id: str
     zones: list[HeatZone]
+    data_confidence: str  # "high" (≥20 sessions) | "low" (<20 sessions)
     checked_at: str
 
 
 class Anomaly(BaseModel):
     type: str
-    severity: str          # INFO | WARN | CRITICAL
+    severity: str                    # INFO | WARN | CRITICAL
     zone_id: str | None = None
     value: float | None = None
     message: str
+    suggested_action: str | None = None
 
 
 class AnomalyReport(BaseModel):
