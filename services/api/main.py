@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 import aiosqlite
 from core.config import get_settings
-from routers import health
+from routers import health, ingest
 
 settings = get_settings()
 
@@ -58,6 +58,7 @@ app = FastAPI(
 )
 
 app.include_router(health.router)
+app.include_router(ingest.router)
 
 
 @app.get("/", include_in_schema=False)
