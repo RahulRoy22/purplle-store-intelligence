@@ -1,0 +1,42 @@
+version: "3.9"
+
+services:
+
+  seed:
+    image: python:3.11-slim
+    volumes:
+      - ./data/mock:/data/mock
+      - ./data/generated:/data/generated
+    command: >
+      sh -c "pip install faker --quiet &&
+             python /data/mock/generate_store_layout.py &&
+             python /data/mock/generate_pos_transactions.py &&
+             python /data/mock/generate_sample_events.py &&
+             echo '[seed] Done.'"
+
+  api:
+    build:
+      context: ./services/api
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data/generated:/data/generated
+      - db_data:/data
+    environment:
+      - DB_PATH=/data/store_intelligence.db
+      - LOG_LEVEL=INFO
+      - STORE_ID=store_001
+      - STALE_FEED_THRESHOLD_MINUTES=10
+    depends_on:
+      seed:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  db_data:
