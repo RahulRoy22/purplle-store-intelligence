@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+data/generated/
+*.db
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+*.egg-info/
