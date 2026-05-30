@@ -35,12 +35,17 @@ CREATE INDEX IF NOT EXISTS idx_events_visitor
 """
 
 
+async def init_db(db_path: str) -> None:
+    """Create DB schema. Called by lifespan (production) and test fixtures."""
+    async with aiosqlite.connect(db_path) as db:
+        await db.executescript(DDL)
+        await db.commit()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up — ensuring DB schema")
-    async with aiosqlite.connect(settings.db_path) as db:
-        await db.executescript(DDL)
-        await db.commit()
+    await init_db(settings.db_path)
     logger.info("DB schema ready at %s", settings.db_path)
     yield
     logger.info("Shutting down")
