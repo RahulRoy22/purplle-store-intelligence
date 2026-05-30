@@ -10,7 +10,7 @@ Five commands to get the full stack running:
 
 ```bash
 # 1. Clone and enter the project
-git clone <repo-url> purplle-store-intelligence && cd purplle-store-intelligence
+git clone https://github.com/RahulRoy22/purplle-store-intelligence && cd purplle-store-intelligence
 
 # 2. Copy environment config
 cp .env.example .env
