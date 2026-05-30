@@ -1,0 +1,9 @@
+data/generated/
+*.db
+.git/
+.pytest_cache/
+**/__pycache__/
+**/*.pyc
+*.egg-info/
+.coverage
+htmlcov/
