@@ -174,8 +174,27 @@ async def get_funnel(db_path: str, store_id: str) -> dict:
 
 
 async def get_heatmap(db_path: str, store_id: str) -> dict:
-    """Zone visit frequency and average dwell, normalised to a 0–100 heat score."""
+    """
+    Zone visit frequency and average dwell, normalised to a 0–100 heat score.
+
+    data_confidence is "high" when ≥ 20 unique visitor sessions have been
+    recorded; "low" otherwise — a flag for the consumer that results may
+    not be statistically representative.
+    """
     async with aiosqlite.connect(db_path) as db:
+
+        # Count unique visitor sessions (ENTRY + REENTRY, staff excluded)
+        async with db.execute(
+            """
+            SELECT COUNT(DISTINCT visitor_id)
+            FROM   events
+            WHERE  store_id = ? AND is_staff = 0
+              AND  event_type IN ('ENTRY', 'REENTRY')
+            """,
+            (store_id,),
+        ) as cur:
+            session_count: int = (await cur.fetchone())[0] or 0
+
         async with db.execute(
             """
             SELECT
@@ -192,10 +211,13 @@ async def get_heatmap(db_path: str, store_id: str) -> dict:
         ) as cur:
             rows = await cur.fetchall()
 
+    data_confidence = "high" if session_count >= 20 else "low"
+
     if not rows:
         return {
             "store_id": store_id,
             "zones": [],
+            "data_confidence": data_confidence,
             "checked_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -215,6 +237,7 @@ async def get_heatmap(db_path: str, store_id: str) -> dict:
     return {
         "store_id": store_id,
         "zones": zones,
+        "data_confidence": data_confidence,
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -267,6 +290,10 @@ async def get_anomalies(db_path: str, store_id: str) -> dict:
                         f"Average billing queue depth {avg_depth:.1f} is critically high — "
                         "risk of customer churn; open additional counters immediately."
                     ),
+                    "suggested_action": (
+                        "Open all available billing counters immediately. "
+                        "Deploy a floor staff member to assist with queue management."
+                    ),
                 })
             elif avg_depth > 5:
                 anomalies.append({
@@ -277,6 +304,10 @@ async def get_anomalies(db_path: str, store_id: str) -> dict:
                     "message": (
                         f"Average billing queue depth {avg_depth:.1f} is elevated — "
                         "consider opening an additional counter."
+                    ),
+                    "suggested_action": (
+                        "Open an additional billing counter or redirect "
+                        "nearby floor staff to assist."
                     ),
                 })
 
@@ -306,6 +337,11 @@ async def get_anomalies(db_path: str, store_id: str) -> dict:
                     "message": (
                         f"Billing queue abandonment rate is {rate * 100:.1f}% — "
                         "more than half of visitors leave before completing a purchase."
+                    ),
+                    "suggested_action": (
+                        "Investigate wait time at billing counters. "
+                        "Consider adding self-checkout or express-lane options "
+                        "to reduce drop-off."
                     ),
                 })
 

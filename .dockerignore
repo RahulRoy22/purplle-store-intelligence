@@ -1,9 +1,44 @@
-data/generated/
-*.db
+# Git
 .git/
-.pytest_cache/
+.gitignore
+
+# Python bytecode
 **/__pycache__/
 **/*.pyc
+**/*.pyo
 *.egg-info/
+
+# Test artefacts
+.pytest_cache/
 .coverage
 htmlcov/
+
+# Generated data (reproduced by seed service at runtime)
+data/generated/
+
+# Private resources — never bake into image
+data/resource/
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# ML model weights — auto-downloaded by ultralytics at runtime
+*.pt
+*.onnx
+*.engine
+
+# SQLite databases (created at runtime via volume)
+*.db
+*.db-shm
+*.db-wal
+
+# Runtime logs
+logs/
+
+# Local env overrides
+.env
+
+# OS noise
+.DS_Store
+Thumbs.db

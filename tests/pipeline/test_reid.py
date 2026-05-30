@@ -1,3 +1,13 @@
+# PROMPT: Give me unit vectors in R^3 such that cosine-similarity pairs are
+#   exactly 1.0, 0.9, 0.85, 0.849, and 0.0 against [1, 0, 0], without
+#   rounding. Use these to test a ReIdentifier that returns visitor_id if
+#   similarity >= threshold (inclusive), else None. Also cover: register
+#   overwrites existing embedding, forget removes from registry, best-match
+#   selection when multiple candidates exist.
+#
+# CHANGES MADE: Cosine similarity on L2-normalised vectors equals their dot
+#   product, so all boundary tests are exact with no floating-point surprises.
+#   Used np.float32 cast to match production dtype from torchreid.
 """
 Phase 4 Tests — Task 4: ReIdentifier  (RED phase)
 

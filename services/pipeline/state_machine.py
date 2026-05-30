@@ -52,6 +52,9 @@ class TrackStateMachine:
         self.store_id = store_id
         self.camera_id = camera_id
         self._tracks: dict[int, _TrackInfo] = {}
+        # Per-visitor event ordinal — incremented on every emitted event so
+        # each event in a visit has a unique session_seq value.
+        self._visitor_seq: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -188,7 +191,8 @@ class TrackStateMachine:
         ]
         if zone_id == self._BILLING_ZONE:
             queue_depth = self._count_billing_visitors()
-            meta = {"queue_depth": queue_depth, "sku_zone": None, "session_seq": 1}
+            # session_seq is set dynamically inside _evt(); pass queue_depth only
+            meta = {"queue_depth": queue_depth, "sku_zone": None}
             events.append(self._evt(
                 info.visitor_id, "BILLING_QUEUE_JOIN", zone_id, None, is_staff, confidence, frame_ts, meta
             ))
@@ -215,6 +219,15 @@ class TrackStateMachine:
         frame_ts: datetime,
         metadata: Optional[dict] = None,
     ) -> dict:
+        # Increment and stamp the per-visitor event ordinal
+        seq = self._visitor_seq.get(visitor_id, 0) + 1
+        self._visitor_seq[visitor_id] = seq
+
+        base_meta: dict = {"queue_depth": None, "sku_zone": None}
+        if metadata:
+            base_meta.update(metadata)
+        base_meta["session_seq"] = seq
+
         return {
             "event_id":   str(uuid.uuid4()),
             "store_id":   self.store_id,
@@ -226,5 +239,5 @@ class TrackStateMachine:
             "dwell_ms":   dwell_ms,
             "is_staff":   is_staff,
             "confidence": confidence,
-            "metadata":   metadata or {"queue_depth": None, "sku_zone": None, "session_seq": 1},
+            "metadata":   base_meta,
         }

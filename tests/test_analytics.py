@@ -1,5 +1,17 @@
+# PROMPT: Design pytest fixtures for a store analytics API backed by SQLite.
+#   Stress-test: (a) staff-only store — all metrics must be 0/empty, never error;
+#   (b) REENTRY visitors — COUNT(DISTINCT visitor_id) must not double-count;
+#   (c) POS transactions at the exact 5-minute window boundary — T+300s inclusive,
+#   T+301s excluded; (d) billing abandonment >50% triggers WARN anomaly with
+#   suggested_action; (e) heatmap data_confidence="low" when fewer than 20 sessions.
+#
+# CHANGES MADE: Replaced julianday() arithmetic with unixepoch() after discovering
+#   SQLite's julianday() does not correctly parse ISO-8601 strings with +00:00 timezone
+#   offsets. Confirmed unixepoch() handles them correctly. Added data_confidence field
+#   to heatmap response and corresponding test assertions. Added suggested_action
+#   field to Anomaly model; updated anomaly tests to assert its presence.
 """
-Phase 3 Tests — Analytics / Intelligence API  (RED phase)
+Phase 3 Tests — Analytics / Intelligence API
 
 Endpoints under test:
   GET /stores/{store_id}/metrics
@@ -12,11 +24,6 @@ Hard rules verified:
   RULE-2  POS correlation    — 5-minute billing-zone window via SQL unixepoch()
   RULE-3  REENTRY dedup      — same visitor_id with REENTRY counts as 1 unique
   RULE-4  Zero-purchase edge — no POS data → conversion_rate == 0.0 (not null/error)
-
-Prompt used to scaffold adversarial data patterns (AI-assisted):
-  "Design pytest fixtures that seed SQLite with events that stress-test:
-   (a) staff-only stores, (b) re-entry visitors, (c) POS transactions at the
-   exact edge of the 5-minute window, (d) billing abandonment with no purchase."
 """
 from __future__ import annotations
 
@@ -535,12 +542,49 @@ class TestHeatmap:
         body = resp.json()
         assert "store_id" in body
         assert "zones" in body
+        assert "data_confidence" in body, "HeatmapReport must include data_confidence field"
         assert "checked_at" in body
         if body["zones"]:
             zone = body["zones"][0]
             required_zone_fields = {"zone_id", "visit_count", "avg_dwell_ms", "heat_score"}
             missing = required_zone_fields - zone.keys()
             assert not missing, f"Zone entry missing fields: {missing}"
+
+    async def test_heatmap_data_confidence_low_when_few_sessions(self, ac):
+        """
+        data_confidence must be 'low' when fewer than 20 unique visitor sessions
+        have been recorded — results may not be statistically representative.
+        """
+        client, db = ac
+        # Seed 5 visitors — below the 20-session threshold
+        await _seed_events(db, [
+            _evt(f"vis_{i:03d}", "ENTRY", "zone_entry", ts_offset_secs=i * 60)
+            for i in range(5)
+        ])
+        resp = await client.get(f"/stores/{STORE}/heatmap")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data_confidence"] == "low", (
+            f"Expected data_confidence='low' with 5 sessions, got: {body['data_confidence']!r}"
+        )
+
+    async def test_heatmap_data_confidence_high_when_enough_sessions(self, ac):
+        """
+        data_confidence must be 'high' when at least 20 unique visitor sessions
+        are present.
+        """
+        client, db = ac
+        # Seed exactly 20 ENTRY events (20 unique visitors)
+        await _seed_events(db, [
+            _evt(f"vis_{i:03d}", "ENTRY", "zone_entry", ts_offset_secs=i * 30)
+            for i in range(20)
+        ])
+        resp = await client.get(f"/stores/{STORE}/heatmap")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["data_confidence"] == "high", (
+            f"Expected data_confidence='high' with 20 sessions, got: {body['data_confidence']!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -652,3 +696,12 @@ class TestAnomalies:
             assert anomaly["severity"] in {"INFO", "WARN", "CRITICAL"}, (
                 f"severity must be INFO/WARN/CRITICAL, got: {anomaly['severity']}"
             )
+            # suggested_action must be present (may be null for INFO, non-null for WARN/CRITICAL)
+            assert "suggested_action" in anomaly, (
+                "Each anomaly must include a suggested_action field"
+            )
+            if anomaly["severity"] in {"WARN", "CRITICAL"}:
+                assert anomaly["suggested_action"] is not None, (
+                    f"WARN/CRITICAL anomaly must have a non-null suggested_action, "
+                    f"got None for type={anomaly['type']}"
+                )

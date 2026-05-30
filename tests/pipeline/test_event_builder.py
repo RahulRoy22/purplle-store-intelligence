@@ -1,3 +1,14 @@
+# PROMPT: Give me edge cases for an event-stamping adapter that converts raw
+#   state-machine dicts into EventIn-valid payloads. Must cover: zone_id=None
+#   (camera_id fallback to ""), multiple events with identical timestamps each
+#   getting unique UUID4 event_ids, tz-naive datetime normalised to UTC,
+#   is_staff stored as Python bool (not np.bool_), and metadata merging where
+#   raw event metadata overrides defaults.
+#
+# CHANGES MADE: Added isinstance(is_staff, bool) check — np.bool_ is a subclass
+#   of int but not bool, causing JSON serialisation to emit 0/1 instead of
+#   true/false. Fixed by wrapping with bool() in _stamp(). Added handling for
+#   state_machine emitting timestamp as isoformat() string (not datetime object).
 """
 Phase 4 Tests — Task 6: EventBuilder  (RED phase)
 

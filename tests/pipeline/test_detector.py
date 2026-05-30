@@ -1,3 +1,13 @@
+# PROMPT: Write tests for a YOLO-based person detection wrapper. The wrapper
+#   must: filter to COCO class 0 (person) only, apply confidence threshold
+#   (inclusive >=), and call the injected model exactly once per frame. Use a
+#   plain Python callable as the mock model — no ultralytics dependency.
+#   Include: zero detections, person-only, mixed classes, confidence at/below
+#   threshold, and a frame-capture count assertion.
+#
+# CHANGES MADE: Used a plain callable mock instead of MagicMock to avoid
+#   torch/ultralytics import in test context. Threshold test uses exact boundary
+#   value (confidence == conf_threshold) which must pass (inclusive).
 """
 Phase 4 Tests — Task 5a: PersonDetector  (RED phase)
 

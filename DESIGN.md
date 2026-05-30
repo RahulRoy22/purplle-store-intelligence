@@ -1,0 +1,128 @@
+# System Design — Purplle Store Intelligence
+
+## Overview
+
+This document describes the architecture of the Purplle Store Intelligence system: a real-time CCTV analytics pipeline that detects, tracks, and analyses in-store visitor behaviour and surfaces actionable KPIs through a REST API.
+
+---
+
+## High-Level Architecture
+
+```
+CCTV Footage (mp4 / live)
+       │
+       ▼
+  [CV Pipeline]  ── one OS process per camera ──────────────────────────────┐
+  YOLOv8 (detect persons)                                                    │
+       │                                                                     │
+  ByteTrack (multi-object tracking, persistent track IDs)                   │
+       │                                                                     │
+  StaffClassifier (HSV uniform detection, CPU-only)                         │
+       │                                                                     │
+  OSNet Re-ID (cross-frame identity, cosine similarity)                     │
+       │                                                                     │
+  ZoneMapper (Shapely polygons, pixel → store zone)                        │
+       │                                                                     │
+  TrackStateMachine (ENTRY / ZONE_ENTER / ZONE_DWELL / EXIT / ...)         │
+       │                                                                     │
+  EventBuilder (stamps UUID, UTC ISO-8601, camera_id)                      │
+       │                                                                     │
+  IngestClient (async httpx, batch POST, 503 retry/backoff)  ───────────────┘
+       │
+       ▼
+  [FastAPI API Service]  ── single Docker container ──
+  POST /events/ingest   (idempotent, batch ≤ 500)
+  GET  /stores/{id}/metrics
+  GET  /stores/{id}/funnel
+  GET  /stores/{id}/heatmap
+  GET  /stores/{id}/anomalies
+  GET  /health
+       │
+       ▼
+  SQLite (aiosqlite, WAL mode, dual-indexed)
+       │
+       ▼
+  POS CSV (loaded once at startup, IST → UTC conversion)
+```
+
+---
+
+## Component Design
+
+### Detection & Tracking
+
+YOLOv8n (nano) was chosen for the detection backbone: it runs in real time on CPU (≥10 FPS for 720p), which is required because the production environment is a retail store with no GPU guarantee. ByteTrack is integrated natively inside the `ultralytics` package via `.track(persist=True)`, eliminating the need for a separate tracking library and its associated version-pinning surface.
+
+### Staff Classification
+
+A two-stage HSV mask approach classifies staff from customers. The first stage computes the fraction of pixels within the bounding-crop that fall inside the configured HSV range (store uniform colour). If this fraction exceeds a configurable threshold (`STAFF_THRESHOLD`, default 0.30), the track is marked `is_staff=True`. This is intentionally simple and fast — it runs per-frame on every crop without a second neural network. The threshold is tunable per-store via environment variables.
+
+### Re-Identification
+
+OSNet-x0_25 (pre-trained on Market-1501) extracts a 512-dimensional L2-normalised embedding from each crop. Visitor identity is established by cosine similarity against a per-process registry. Re-ID runs only on the **first appearance** of a new ByteTrack ID to avoid redundant model inference. The registry maps `visitor_id → embedding` and is reset when the process restarts — appropriate for a single-session deployment.
+
+### Zone Mapping
+
+Each camera's layout is a JSON file produced by `scripts/calibrate.py` containing pixel polygons drawn interactively on a reference frame. `ZoneMapper` uses Shapely's `covers()` predicate for point-in-polygon classification. This is O(zones) per centroid — fast enough at 30 FPS with 6 zones.
+
+### State Machine
+
+`TrackStateMachine` maintains per-track state across frames:
+- Each track starts as `PENDING` on first detection, emitting `ENTRY` on the first frame and transitioning to `IN_ZONE` or `FLOOR`.
+- Zone transitions emit `ZONE_ENTER` / `ZONE_EXIT` pairs.
+- Billing zone entry emits `BILLING_QUEUE_JOIN` with queue depth from metadata.
+- When a track disappears (not in ByteTrack's active set), `flush_exits()` emits `EXIT` and records dwell.
+- On `KeyboardInterrupt`, `flush_exits(set(), ...)` is called to drain all in-flight tracks before process exit.
+
+### Ingestion API
+
+FastAPI with a single SQLite database (via `aiosqlite`) was chosen over PostgreSQL to eliminate external infrastructure dependencies — the entire stack runs with `docker compose up` on any developer machine. The `events` table uses `event_id TEXT PRIMARY KEY` and `INSERT OR IGNORE` for idempotent batch ingest. Two covering indexes (`store_id, timestamp` and `visitor_id, timestamp`) make all analytics queries index-scannable.
+
+### POS Correlation
+
+Conversion rate is computed with a pure SQL `JOIN` using SQLite's `unixepoch()` function, which natively handles ISO-8601 strings with timezone offsets. A 5-minute (300-second) bilateral window matches billing zone dwells to POS transactions without any Python-level datetime arithmetic or in-memory loops.
+
+---
+
+## AI-Assisted Decisions
+
+Three design decisions were shaped in direct collaboration with the LLM and are documented here because the AI's reasoning changed the final implementation in non-obvious ways.
+
+### 1. Extracted `init_db()` instead of schema-only-in-lifespan
+
+**AI observation:** `httpx.ASGITransport` — the recommended tool for testing FastAPI with `pytest-asyncio` — does not fire ASGI lifespan events. If schema creation only lived inside the `lifespan()` context manager, every test would run against a schema-less database, producing false-passing tests that break silently in production when the table columns don't match.
+
+**AI suggestion:** Extract `init_db(db_path: str)` as a standalone async coroutine callable from both the production lifespan hook and test fixtures, making schema creation explicit and testable.
+
+**Decision:** Adopted as proposed. The AI identified a non-obvious Python testing pitfall (ASGI transport lifecycle bypass) that would have produced an entire class of silent, false-passing coverage. This was accepted immediately because it also made the schema a single source of truth with a clear migration path to PostgreSQL.
+
+### 2. `unixepoch()` for POS-to-visitor correlation vs. Python in-memory loop
+
+**AI initial draft:** A Python nested loop over billing events and POS rows with `timedelta` arithmetic.
+
+**Engineer rejection:** "This is exactly the kind of logic that belongs in SQL. We have 500-event batches and thousands of POS rows — an O(N×M) Python loop is a performance time bomb."
+
+**AI deeper investigation:** SQLite's `unixepoch(timestamp)` correctly parses ISO-8601 strings that include timezone offsets (`+00:00`) and converts them to Unix epoch integers. This made the entire correlation expressible as a single SQL `JOIN` with an arithmetic `WHERE` clause.
+
+**Decision:** The AI's willingness to search for a pure-SQL approach (after being explicitly blocked from the easy path) produced a significantly better solution — one that is index-eligible, has no N×M complexity, and handles timezone-offset strings correctly without any pre-processing. Three boundary tests (T+240s, T+300s, T+360s) were written to verify the edge of the 5-minute window.
+
+### 3. OSNet Re-ID runs only on first track appearance
+
+**AI observation:** If Re-ID ran on every frame, a 30 FPS video with 10 active tracks would invoke the OSNet model 300 times per second — exceeding CPU real-time budget by approximately 20×.
+
+**AI suggestion:** Cache Re-ID embeddings by ByteTrack ID and only invoke `extract_embedding()` on the first appearance of a new track ID. ByteTrack provides persistent IDs across frames, so once identity is established at first appearance it is stable for the track's lifetime without re-running the model.
+
+**Decision:** Adopted. This reduced Re-ID inference from O(tracks × frames) to O(unique_tracks), making CPU-only inference viable. The trade-off is that if a person changes appearance drastically mid-track (e.g., removes a jacket), the Re-ID embedding will be stale — acceptable for a retail session of 10–60 minutes where appearance is generally stable.
+
+---
+
+## Trade-offs Summary
+
+| Decision | Chosen | Alternative | Reason |
+|---|---|---|---|
+| Database | SQLite | PostgreSQL | Zero external infra; `docker compose up` works without setup |
+| Detection | YOLOv8n | YOLOv8s/m | CPU real-time budget (≥10 FPS); model weights auto-downloaded |
+| Re-ID frequency | First appearance only | Every frame | O(unique_tracks) vs O(tracks×frames); enables CPU inference |
+| Zone geometry | Shapely pixel polygons | Grid cells | Pixel accuracy; drawn interactively via calibrate.py |
+| POS timestamp | UTC stored, IST converted at ingest | Store as IST | Correct `unixepoch()` arithmetic; all timestamps in same TZ |
+| Multi-camera | One OS process per camera | Shared asyncio loop | Independent GIL; no cross-camera GPU contention; per-camera logs |

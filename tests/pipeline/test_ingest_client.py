@@ -1,3 +1,14 @@
+# PROMPT: Design a pytest-httpx test suite for an async batch HTTP client that
+#   POSTs to /events/ingest with configurable batch size and exponential-backoff
+#   retry on 503. Include: (1) 503-twice-then-200 retry fixture without real
+#   sleeps; (2) non-retriable errors (422, 500) raise IngestError immediately;
+#   (3) send([]) makes exactly 0 HTTP requests; (4) batch splitting — N events
+#   with batch_size=B makes ceil(N/B) requests, last batch may be smaller.
+#
+# CHANGES MADE: Used retry_delays=(0, 0) in tests to avoid asyncio.sleep delays.
+#   Added @pytest.mark.httpx_mock(assert_all_responses_were_requested=False) on
+#   tests that raise NotImplementedError before consuming mock responses, to
+#   prevent pytest-httpx teardown errors during RED phase.
 """
 Phase 4 Tests — Task 7: IngestClient  (RED phase)
 

@@ -25,12 +25,17 @@ services:
     volumes:
       - ./data/generated:/data/generated
       - db_data:/data
+      # Mount the real organiser-provided dataset as read-only.
+      # The API lifespan ingests pos_transactions.csv on startup via POS_CSV_PATH.
+      - ./data/resource:/data/resource:ro
     environment:
       - DB_PATH=/data/store_intelligence.db
       - LOG_LEVEL=INFO
       - STORE_ID=store_001
       - STALE_FEED_THRESHOLD_MINUTES=10
-      - POS_CSV_PATH=/data/generated/pos_transactions.csv
+      # Switch from the mock CSV to the real organiser-provided POS data.
+      # Comment out or set to "" to fall back to the seeded mock data.
+      - POS_CSV_PATH=/data/resource/pos_transactions.csv
     depends_on:
       seed:
         condition: service_completed_successfully

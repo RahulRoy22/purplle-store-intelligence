@@ -1,11 +1,17 @@
+# PROMPT: Write pytest-asyncio tests for a FastAPI batch ingest endpoint at
+#   POST /events/ingest. Cover: (1) happy path — 200 with accepted=N;
+#   (2) idempotency — re-sending the same batch returns duplicate=N, accepted=0;
+#   (3) partial success — mix of valid + malformed events, good ones land;
+#   (4) batch size limit — >500 events returns 422; (5) empty batch — 200 with
+#   accepted=0; (6) staff events accepted at ingest (is_staff=True stored);
+#   (7) DB unavailable → 503 with structured JSON error body.
+#
+# CHANGES MADE: Verified that the accepted/duplicate split uses a query-before-insert
+#   pattern (not cursor.rowcount) to handle aiosqlite executemany rowcount
+#   unreliability across Python versions. Added httpx_mock(assert_all_responses_were_requested=False)
+#   on tests that raise before making HTTP requests to prevent teardown errors.
 """
-Tests for POST /events/ingest
-
-Prompt used for scaffolding (AI-assisted):
-  "Write pytest-asyncio tests for a FastAPI batch ingest endpoint.
-   Cover: happy path, idempotency (duplicate batch), partial success
-   (mix of valid + invalid events), batch size limit (>500), empty batch,
-   staff events accepted at ingest, and DB 503 on failure."
+Tests for POST /events/ingest.
 """
 import json
 import pytest
