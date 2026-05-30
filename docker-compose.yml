@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
 
   seed:
@@ -16,8 +14,12 @@ services:
 
   api:
     build:
-      context: ./services/api
-      dockerfile: Dockerfile
+      # Context is the project root so the test stage can COPY tests/ and pytest.ini
+      context: .
+      dockerfile: services/api/Dockerfile
+      # "test" stage: includes tests/ directory and pytest.
+      # Swap to "production" before a real deployment to strip test code.
+      target: test
     ports:
       - "8000:8000"
     volumes:
@@ -28,6 +30,7 @@ services:
       - LOG_LEVEL=INFO
       - STORE_ID=store_001
       - STALE_FEED_THRESHOLD_MINUTES=10
+      - POS_CSV_PATH=/data/generated/pos_transactions.csv
     depends_on:
       seed:
         condition: service_completed_successfully
