@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     db_path: str = "/data/store_intelligence.db"
     log_level: str = "INFO"
     stale_feed_threshold_minutes: int = 10
+    pos_csv_path: str = ""   # empty → skip CSV load (safe default for tests)
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
