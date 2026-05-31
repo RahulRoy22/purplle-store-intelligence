@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install API dependencies
+        run: |
+          pip install -r services/api/requirements.txt
+          pip install pytest pytest-asyncio pytest-cov httpx
+
+      - name: Run API tests with coverage
+        run: |
+          PYTHONPATH=services/api pytest tests/ \
+            --ignore=tests/pipeline \
+            --cov=services/api \
+            --cov-report=term-missing \
+            --cov-fail-under=70 \
+            -v
+
+      - name: Install pipeline dependencies
+        run: |
+          pip install numpy
+
+      - name: Run pipeline tests
+        run: |
+          PYTHONPATH="services/pipeline:services/api" \
+            pytest tests/pipeline/ -v

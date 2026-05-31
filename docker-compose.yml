@@ -17,9 +17,9 @@ services:
       # Context is the project root so the test stage can COPY tests/ and pytest.ini
       context: .
       dockerfile: services/api/Dockerfile
-      # "test" stage: includes tests/ directory and pytest.
-      # Swap to "production" before a real deployment to strip test code.
-      target: test
+      # "production" stage: lean image, no test code, no pytest.
+      # Use "test" target locally to run the test suite inside the container.
+      target: production
     ports:
       - "8000:8000"
     volumes:

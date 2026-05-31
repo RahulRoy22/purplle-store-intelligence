@@ -52,7 +52,8 @@ async def test_ingest_valid_batch(client: AsyncClient):
     body = resp.json()
     assert body["accepted"] == 3
     assert body["duplicate"] == 0
-    assert body["rejected"] == []
+    assert body["rejected"] == 0
+    assert body["errors"] == []
     assert "trace_id" in body
     assert body["latency_ms"] >= 0
 
@@ -72,7 +73,8 @@ async def test_ingest_idempotent_duplicate_batch(client: AsyncClient):
     body2 = r2.json()
     assert body2["accepted"] == 0
     assert body2["duplicate"] == 5
-    assert body2["rejected"] == []
+    assert body2["rejected"] == 0
+    assert body2["errors"] == []
 
 
 @pytest.mark.asyncio
@@ -88,7 +90,8 @@ async def test_ingest_partial_duplicate(client: AsyncClient):
     body2 = r2.json()
     assert body2["accepted"] == 2
     assert body2["duplicate"] == 2
-    assert body2["rejected"] == []
+    assert body2["rejected"] == 0
+    assert body2["errors"] == []
 
 
 # ---- partial success (validation failures) ----------------------------------
@@ -99,42 +102,46 @@ async def test_ingest_invalid_event_type_rejected(client: AsyncClient):
     bad = make_event(event_type="SNEEZE")
     good = make_event()
     resp = await client.post("/events/ingest", json={"events": [bad, good]})
-    assert resp.status_code == 200
+    assert resp.status_code == 207
     body = resp.json()
     assert body["accepted"] == 1
-    assert body["rejected"][0]["event_id"] == bad["event_id"]
-    assert "event_type" in body["rejected"][0]["reason"].lower() or len(body["rejected"][0]["reason"]) > 0
+    assert body["rejected"] == 1
+    assert body["errors"][0]["event_id"] == bad["event_id"]
+    assert len(body["errors"][0]["detail"]) > 0
 
 
 @pytest.mark.asyncio
 async def test_ingest_confidence_out_of_range_rejected(client: AsyncClient):
-    """confidence > 1.0 must be rejected."""
+    """confidence > 1.0 must be rejected; all-invalid batch returns 422."""
     bad = make_event(confidence=1.5)
     resp = await client.post("/events/ingest", json={"events": [bad]})
+    assert resp.status_code == 422
     body = resp.json()
     assert body["accepted"] == 0
-    assert len(body["rejected"]) == 1
+    assert body["rejected"] == 1
 
 
 @pytest.mark.asyncio
 async def test_ingest_missing_required_field_rejected(client: AsyncClient):
-    """An event missing visitor_id is rejected."""
+    """An event missing visitor_id is rejected; all-invalid batch returns 422."""
     bad = make_event()
     del bad["visitor_id"]
     resp = await client.post("/events/ingest", json={"events": [bad]})
+    assert resp.status_code == 422
     body = resp.json()
     assert body["accepted"] == 0
-    assert len(body["rejected"]) == 1
+    assert body["rejected"] == 1
 
 
 @pytest.mark.asyncio
 async def test_ingest_naive_timestamp_rejected(client: AsyncClient):
-    """A timestamp with no timezone info must be rejected."""
+    """A timestamp with no timezone info must be rejected; all-invalid batch returns 422."""
     bad = make_event(timestamp="2026-05-30T10:00:00")  # no +00:00
     resp = await client.post("/events/ingest", json={"events": [bad]})
+    assert resp.status_code == 422
     body = resp.json()
     assert body["accepted"] == 0
-    assert len(body["rejected"]) == 1
+    assert body["rejected"] == 1
 
 
 # ---- batch size limit -------------------------------------------------------
@@ -157,7 +164,8 @@ async def test_ingest_empty_batch(client: AsyncClient):
     body = resp.json()
     assert body["accepted"] == 0
     assert body["duplicate"] == 0
-    assert body["rejected"] == []
+    assert body["rejected"] == 0
+    assert body["errors"] == []
 
 
 @pytest.mark.asyncio
@@ -192,7 +200,8 @@ async def test_ingest_all_event_types_accepted(client: AsyncClient):
     resp = await client.post("/events/ingest", json={"events": events})
     body = resp.json()
     assert body["accepted"] == 8
-    assert body["rejected"] == []
+    assert body["rejected"] == 0
+    assert body["errors"] == []
 
 
 # ---- 503 on DB failure ------------------------------------------------------

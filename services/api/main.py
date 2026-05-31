@@ -1,9 +1,14 @@
 import csv
+import json
 import logging
 import pathlib
+import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
 import aiosqlite
 from core.config import get_settings
 from routers import health, ingest, stores, dashboard
@@ -12,9 +17,46 @@ settings = get_settings()
 
 logging.basicConfig(
     level=settings.log_level,
-    format='{"time":"%(asctime)s","level":"%(levelname)s","logger":"%(name)s","msg":"%(message)s"}',
+    format="%(message)s",
 )
 logger = logging.getLogger("api")
+_request_logger = logging.getLogger("api.request")
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Emit one structured JSON log line per request with all required fields."""
+
+    async def dispatch(self, request: Request, call_next):
+        trace_id = str(uuid.uuid4())
+        request.state.trace_id = trace_id
+        t0 = time.perf_counter()
+
+        response = await call_next(request)
+
+        latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+
+        # store_id: prefer path param, fall back to state set by router
+        store_id = (
+            request.path_params.get("store_id")
+            or getattr(request.state, "store_id", None)
+        )
+
+        event_count = getattr(request.state, "event_count", None)
+
+        _request_logger.info(
+            json.dumps({
+                "trace_id": trace_id,
+                "store_id": store_id,
+                "endpoint": request.url.path,
+                "method": request.method,
+                "status_code": response.status_code,
+                "latency_ms": latency_ms,
+                "event_count": event_count,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
+        )
+
+        return response
 
 DDL = """
 CREATE TABLE IF NOT EXISTS events (
@@ -47,6 +89,15 @@ CREATE TABLE IF NOT EXISTS pos_transactions (
 );
 CREATE INDEX IF NOT EXISTS idx_pos_store_ts
     ON pos_transactions(store_id, timestamp);
+
+CREATE TABLE IF NOT EXISTS visitor_embeddings (
+    visitor_id  TEXT PRIMARY KEY,
+    store_id    TEXT NOT NULL,
+    embedding   BLOB NOT NULL,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ve_store
+    ON visitor_embeddings(store_id, created_at DESC);
 """
 
 
@@ -228,6 +279,8 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 )
+
+app.add_middleware(RequestLoggingMiddleware)
 
 app.include_router(health.router)
 app.include_router(ingest.router)
