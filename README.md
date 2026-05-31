@@ -6,24 +6,23 @@ Real-time CCTV analytics pipeline for retail stores. Detects visitors via YOLOv8
 
 ## Quick Start (API + Mock Data)
 
-Five commands to get the full stack running:
+Three commands to get the full stack running:
 
 ```bash
 # 1. Clone and enter the project
 git clone https://github.com/RahulRoy22/purplle-store-intelligence && cd purplle-store-intelligence
 
-# 2. Copy environment config
-cp .env.example .env
-
-# 3. Build and start the API (includes mock data seed)
+# 2. Build and start the API (includes mock data seed — no other setup needed)
 docker compose up --build -d
 
-# 4. Wait for health check to pass, then verify
+# 3. Wait for health check to pass, then query live analytics
 curl http://localhost:8000/health
-
-# 5. Query live analytics
 curl http://localhost:8000/stores/STORE_BLR_002/metrics
 ```
+
+> **Note — `.env` is optional for Docker.** All variables (`STORE_ID`, `DB_PATH`, etc.) are
+> already set in `docker-compose.yml`. Copy `.env.example → .env` only if you want to run
+> the API locally without Docker (`uvicorn main:app …`), where pydantic-settings reads it.
 
 Expected `/health` response:
 ```json
@@ -133,15 +132,18 @@ A web dashboard is served directly by the API — no separate process needed.
 http://localhost:8000/dashboard
 ```
 
-Open that URL after `docker compose up` and you'll see a live-updating display that auto-refreshes every 5 seconds:
+Open that URL after `docker compose up` 
 
 - **KPI cards** — unique visitors, conversion rate, avg dwell, billing abandonment
 - **Conversion funnel** — 4-stage percentage bar chart (Entry → Browse → Billing → Purchase)  
 - **Zone heatmap** — colour-coded bars per zone with `data_confidence` badge (low / high)
 - **Anomaly panel** — severity-coded cards (CRITICAL / WARN / INFO) with `suggested_action`
 
-All data comes from the same REST endpoints; the page uses plain JavaScript `fetch` with `setInterval`.
-
+The dashboard renders from the analytics REST endpoints and updates in real time
+via Server-Sent Events: it subscribes to `GET /stores/{id}/stream`, and the API
+pushes a notification over that SSE channel after every successful event ingest,
+which triggers an immediate refresh — no polling. This proves the pipeline → API →
+UI path is live, not batch-replayed.
 ---
 
 ## Analytics API Endpoints
@@ -154,6 +156,7 @@ All data comes from the same REST endpoints; the page uses plain JavaScript `fet
 | GET | `/stores/{id}/funnel` | Entry → browse → billing → purchase funnel |
 | GET | `/stores/{id}/heatmap` | Zone visit frequency and heat score (0–100) |
 | GET | `/stores/{id}/anomalies` | Rule-based alerts: queue depth, abandonment, **dead zone**, **conversion drop** |
+| GET | `/stores/{id}/stream` | Server-Sent Events feed; pushes on each ingest (powers the live dashboard) |
 
 Full interactive documentation: http://localhost:8000/docs
 
