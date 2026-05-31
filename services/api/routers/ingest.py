@@ -17,12 +17,14 @@ import time
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
 from core.config import get_settings
 from db.events import batch_upsert
-from models.event import EventIn, IngestResponse, RejectedEvent
+from models.event import EventIn
+from routers.stores import notify_store_subscribers
 
 router = APIRouter()
 logger = logging.getLogger("ingest")
@@ -42,11 +44,10 @@ class IngestRequest(BaseModel):
 
 @router.post(
     "/events/ingest",
-    response_model=IngestResponse,
     tags=["ingestion"],
     summary="Batch-ingest CV pipeline events (idempotent)",
 )
-async def ingest_events(payload: IngestRequest) -> IngestResponse:
+async def ingest_events(request: Request, payload: IngestRequest) -> JSONResponse:
     trace_id = str(uuid.uuid4())
     settings = get_settings()
     t0 = time.monotonic()
@@ -60,32 +61,37 @@ async def ingest_events(payload: IngestRequest) -> IngestResponse:
 
     # --- Per-event validation (partial success pattern) --------------------
     valid_events: list[EventIn] = []
-    rejected: list[RejectedEvent] = []
+    errors: list[dict] = []
 
-    for raw in payload.events:
+    for idx, raw in enumerate(payload.events):
         try:
             event = EventIn.model_validate(raw)
             valid_events.append(event)
         except ValidationError as exc:
-            # Surface the first validation error message; keep it human-readable
             first_error = exc.errors(include_url=False)[0]
-            reason = f"{'.'.join(str(l) for l in first_error['loc'])}: {first_error['msg']}"
-            rejected.append(
-                RejectedEvent(
-                    event_id=raw.get("event_id"),
-                    reason=reason,
-                )
-            )
+            detail = f"{'.'.join(str(l) for l in first_error['loc'])}: {first_error['msg']}"
+            errors.append({
+                "index": idx,
+                "event_id": raw.get("event_id"),
+                "detail": detail,
+            })
+
+    # Expose batch size to the logging middleware
+    request.state.event_count = len(payload.events)
 
     # --- DB write (all-or-nothing for valid events) ------------------------
     inserted = 0
     duplicate = 0
 
     if valid_events:
+        store_id = valid_events[0].store_id
+        request.state.store_id = store_id
         try:
             result = await batch_upsert(settings.db_path, valid_events)
             inserted = result["inserted"]
             duplicate = result["duplicate"]
+            if inserted > 0:
+                notify_store_subscribers(store_id, inserted)
         except Exception as exc:
             logger.error(
                 json.dumps({
@@ -105,11 +111,13 @@ async def ingest_events(payload: IngestRequest) -> IngestResponse:
                     "trace_id": trace_id,
                 },
             )
+    else:
+        store_id = None
 
     latency_ms = round((time.monotonic() - t0) * 1000, 2)
+    rejected_count = len(errors)
 
     # --- Structured audit log ----------------------------------------------
-    store_id = valid_events[0].store_id if valid_events else None
     logger.info(
         json.dumps({
             "event": "ingest_complete",
@@ -118,15 +126,26 @@ async def ingest_events(payload: IngestRequest) -> IngestResponse:
             "batch_size": len(payload.events),
             "accepted": inserted,
             "duplicate": duplicate,
-            "rejected": len(rejected),
+            "rejected": rejected_count,
             "latency_ms": latency_ms,
         })
     )
 
-    return IngestResponse(
-        trace_id=trace_id,
-        accepted=inserted,
-        duplicate=duplicate,
-        rejected=rejected,
-        latency_ms=latency_ms,
-    )
+    body = {
+        "trace_id": trace_id,
+        "accepted": inserted,
+        "duplicate": duplicate,
+        "rejected": rejected_count,
+        "errors": errors,
+        "latency_ms": latency_ms,
+    }
+
+    # HTTP 200 — all valid; 207 — partial; 422 — all invalid
+    if rejected_count == 0:
+        status_code = 200
+    elif inserted > 0:
+        status_code = 207
+    else:
+        status_code = 422
+
+    return JSONResponse(status_code=status_code, content=body)

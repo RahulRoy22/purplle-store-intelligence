@@ -1,3 +1,11 @@
+# PROMPT: Write a conftest.py for tests/pipeline/ that adds both
+#   services/pipeline and services/api to sys.path so pipeline modules and the
+#   shared EventIn Pydantic model are importable without setting PYTHONPATH
+#   externally. Must not interfere with the parent conftest.py in tests/.
+#
+# CHANGES MADE: Used Path(__file__).resolve().parents[2] to anchor the root
+#   path portably regardless of working directory. Added duplicate-path guard
+#   (if str(...) not in sys.path) so repeated imports don't accumulate paths.
 """
 conftest.py for tests/pipeline/
 

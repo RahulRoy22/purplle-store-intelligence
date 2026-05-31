@@ -5,14 +5,38 @@ routers/stores.py — Analytics endpoints for a single store.
   GET /stores/{store_id}/funnel    — Visitor conversion funnel
   GET /stores/{store_id}/heatmap   — Zone heat map (normalised 0–100)
   GET /stores/{store_id}/anomalies — Rule-based anomaly alerts
+  GET /stores/{store_id}/stream    — Server-Sent Events real-time feed
 """
+import asyncio
+import json
+from collections import defaultdict
+from datetime import datetime, timezone
+
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 
 from core.config import get_settings
 from db.analytics import get_anomalies, get_funnel, get_heatmap, get_metrics
 from models.stores import AnomalyReport, FunnelReport, HeatmapReport, StoreMetrics
 
 router = APIRouter(prefix="/stores", tags=["analytics"])
+
+# SSE subscriber queues: store_id → list of asyncio.Queue
+_subscribers: dict[str, list[asyncio.Queue]] = defaultdict(list)
+
+
+def notify_store_subscribers(store_id: str, new_events: int) -> None:
+    """Called by the ingest router after a successful DB write."""
+    payload = {
+        "store_id": store_id,
+        "new_events": new_events,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    for q in list(_subscribers.get(store_id, [])):
+        try:
+            q.put_nowait(payload)
+        except asyncio.QueueFull:
+            pass
 
 
 @router.get("/{store_id}/metrics", response_model=StoreMetrics, summary="Store KPI snapshot")
@@ -39,3 +63,38 @@ async def store_heatmap(store_id: str) -> HeatmapReport:
 async def store_anomalies(store_id: str) -> AnomalyReport:
     data = await get_anomalies(get_settings().db_path, store_id)
     return AnomalyReport(**data)
+
+
+@router.get("/{store_id}/stream", summary="Server-Sent Events real-time feed", tags=["streaming"])
+async def store_stream(store_id: str) -> StreamingResponse:
+    """
+    SSE endpoint: pushes a JSON payload whenever new events are ingested for
+    the store. Sends a keepalive comment every 30 s to keep the connection alive.
+    """
+    queue: asyncio.Queue = asyncio.Queue(maxsize=64)
+    _subscribers[store_id].append(queue)
+
+    async def event_generator():
+        try:
+            while True:
+                try:
+                    data = await asyncio.wait_for(queue.get(), timeout=30)
+                    yield f"data: {json.dumps(data)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+        except GeneratorExit:
+            pass
+        finally:
+            try:
+                _subscribers[store_id].remove(queue)
+            except ValueError:
+                pass
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

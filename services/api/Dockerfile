@@ -27,14 +27,10 @@ FROM base AS test
 # App source (from services/api/ relative to project-root build context)
 COPY services/api/ .
 
-# API tests only — pipeline tests (tests/pipeline/) require numpy/shapely/
-# ultralytics which are NOT in this image. Pipeline tests run separately:
-#   PYTHONPATH="services/pipeline:services/api" pytest tests/pipeline/ -v
-COPY tests/conftest.py ./tests/conftest.py
-COPY tests/test_health.py ./tests/test_health.py
-COPY tests/test_ingest.py ./tests/test_ingest.py
-COPY tests/test_analytics.py ./tests/test_analytics.py
+# Copy all API-level tests (excludes pipeline tests that need heavy deps)
+COPY tests/ ./tests/
 COPY pytest.ini ./pytest.ini
+RUN pip install --no-cache-dir pytest pytest-asyncio pytest-cov httpx
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 

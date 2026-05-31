@@ -162,16 +162,14 @@ _HTML = """<!DOCTYPE html>
   </div>
 
   <div class="mt-3 mb-4 refresh-info text-end">
-    Auto-refreshes every <span id="refresh-interval">5</span>s &nbsp;&bull;&nbsp; <a href="/docs" class="text-secondary">API docs</a>
+    Real-time via SSE &nbsp;&bull;&nbsp; <a href="/docs" class="text-secondary">API docs</a>
   </div>
 </div>
 
 <script>
 const STORE_ID = "STORE_ID_PLACEHOLDER";
-const REFRESH_MS = 5000;
 
 document.getElementById("store-badge").textContent = "store: " + STORE_ID;
-document.getElementById("refresh-interval").textContent = REFRESH_MS / 1000;
 
 function fmtMs(ms) {
   if (ms == null) return "—";
@@ -308,7 +306,19 @@ async function refresh() {
 }
 
 refresh();
-setInterval(refresh, REFRESH_MS);
+
+// Real-time updates via Server-Sent Events — no polling interval needed
+const evtSource = new EventSource(`/stores/${STORE_ID}/stream`);
+evtSource.onmessage = (e) => {
+  const payload = JSON.parse(e.data);
+  if (payload.new_events > 0) {
+    refresh();
+  }
+};
+evtSource.onerror = () => {
+  console.warn("SSE stream closed, reconnecting in 5s…");
+  setTimeout(() => location.reload(), 5000);
+};
 </script>
 </body>
 </html>

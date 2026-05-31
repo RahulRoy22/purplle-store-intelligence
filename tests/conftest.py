@@ -1,3 +1,15 @@
+# PROMPT: Write pytest fixtures for a FastAPI async test suite backed by aiosqlite.
+#   Need: (1) a session-scoped tmp_db fixture that points DB_PATH env var to an
+#   isolated temp SQLite file so tests don't pollute each other; (2) an async
+#   client fixture (function-scoped) using httpx.AsyncClient + ASGITransport
+#   wired to the FastAPI app, that manually calls init_db() because ASGITransport
+#   does not fire ASGI lifespan events. Framework: pytest-asyncio, aiosqlite,
+#   httpx. Must be importable by all test files under tests/.
+#
+# CHANGES MADE: Scoped tmp_db as session-wide (not function) to keep one DB file
+#   per test session; analytics tests use their own per-test tmp_path instead.
+#   Added get_settings.cache_clear() call before constructing the client so env
+#   var changes are reflected in the cached settings singleton.
 import pytest
 import pytest_asyncio
 import os
