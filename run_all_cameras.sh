@@ -26,7 +26,9 @@
 # Environment overrides (all optional)
 # -------------------------------------
 #   API_URL        Base URL of the ingest API.  Default: http://localhost:8000
-#   STORE_ID       Store ID written to every event.  Default: store_001
+#   STORE_ID       Store ID written to every event.  Default: STORE_BLR_002
+#   DB_PATH        Shared SQLite path for cross-camera Re-ID.
+#                  Default: /data/store_intelligence.db
 #   YOLO_WEIGHTS   YOLOv8 weights file or name.    Default: yolov8n.pt
 #   BATCH_SIZE     Events per POST.                Default: 100
 #   RETRY_DELAYS   Comma-separated retry seconds.  Default: 1.0,2.0,4.0
@@ -65,7 +67,11 @@ echo " Python      : $PYTHON"
 # Shared config (can be overridden by env)
 # ---------------------------------------------------------------------------
 API_URL="${API_URL:-http://localhost:8000}"
-STORE_ID="${STORE_ID:-store_001}"
+STORE_ID="${STORE_ID:-STORE_BLR_002}"
+# Shared SQLite path — MUST be identical for every camera process so the
+# cross-camera Re-ID registry (visitor_embeddings) is visible to all of them.
+# Defaults to the API's DB path so a person seen on two cameras is one visitor.
+DB_PATH="${DB_PATH:-/data/store_intelligence.db}"
 YOLO_WEIGHTS="${YOLO_WEIGHTS:-yolov8n.pt}"
 BATCH_SIZE="${BATCH_SIZE:-100}"
 RETRY_DELAYS="${RETRY_DELAYS:-1.0,2.0,4.0}"
@@ -141,6 +147,7 @@ echo " run_all_cameras.sh — Purplle Store Intelligence Pipeline"
 echo "============================================================"
 echo " API_URL     : $API_URL"
 echo " STORE_ID    : $STORE_ID"
+echo " DB_PATH     : $DB_PATH"
 echo " YOLO_WEIGHTS: $YOLO_WEIGHTS"
 echo " Log dir     : $LOG_DIR"
 echo "------------------------------------------------------------"
@@ -221,6 +228,7 @@ for entry in "${CAMERAS[@]}"; do
       CAMERA_ID="$cam_id"         \
       LAYOUT_PATH="$layout_path"  \
       STORE_ID="$STORE_ID"        \
+      DB_PATH="$DB_PATH"          \
       API_URL="$API_URL"          \
       YOLO_WEIGHTS="$YOLO_WEIGHTS"\
       BATCH_SIZE="$BATCH_SIZE"    \

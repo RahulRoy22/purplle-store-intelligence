@@ -48,7 +48,7 @@ from config import PipelineConfig
 from detector import PersonDetector
 from event_builder import EventBuilder
 from ingest_client import IngestClient, IngestError
-from reid import ReIdentifier
+from reid import ReIdentifier, SharedRegistry
 from staff_classifier import StaffClassifier
 from state_machine import TrackStateMachine
 from tracker import PersonTracker
@@ -173,6 +173,8 @@ def _process_frame(
     tracker: PersonTracker,
     staff_clf: StaffClassifier,
     re_id: ReIdentifier,
+    registry: SharedRegistry,
+    registry_threshold: float,
     zone_mapper: ZoneMapper,
     state_machine: TrackStateMachine,
     # Mutable state carried across frames:
@@ -211,7 +213,10 @@ def _process_frame(
         if track_id not in known_track_ids and not is_staff and crop.size > 0:
             try:
                 embedding = re_id.extract_embedding(crop)
-                visitor_id = re_id.identify(embedding)   # None = new visitor
+                # Cross-camera identity lives in the SHARED registry (SQLite-backed),
+                # so the same person seen on the entry cam and a floor cam resolves
+                # to ONE visitor_id instead of being double-counted per process.
+                visitor_id = registry.lookup(embedding, registry_threshold)  # None = new
                 # Defer embedding registration until we have the actual visitor_id
                 # (state machine assigns it below on first update)
                 _pending_embed = embedding
@@ -238,7 +243,7 @@ def _process_frame(
             if _pending_embed is not None and events:
                 # ENTRY or REENTRY is always the first event for a new track
                 actual_vid = events[0]["visitor_id"]
-                re_id.register(actual_vid, _pending_embed)
+                registry.register(actual_vid, _pending_embed)
 
     # --- Flush exits for tracks that disappeared this frame ---
     raw_events.extend(state_machine.flush_exits(active_ids, frame_ts))
@@ -281,7 +286,11 @@ async def run_pipeline(cfg: PipelineConfig) -> None:
         hsv_upper=np.array(cfg.staff_hsv_upper, dtype=np.uint8),
         threshold=cfg.staff_threshold,
     )
+    # ReIdentifier owns the OSNet model call + L2 normalisation (extract_embedding).
+    # Identity matching itself is delegated to the SHARED, SQLite-backed registry
+    # so every camera process resolves a person to the same visitor_id.
     re_id      = ReIdentifier(_build_osnet_embedder(device), threshold=cfg.reid_threshold)
+    registry   = SharedRegistry(cfg.store_id)
     zone_mapper = ZoneMapper.from_file(cfg.layout_path)
 
     # Build camera map from layout for EventBuilder
@@ -333,7 +342,8 @@ async def run_pipeline(cfg: PipelineConfig) -> None:
 
             raw_events = _process_frame(
                 frame, frame_ts,
-                detector, tracker, staff_clf, re_id, zone_mapper, state_machine,
+                detector, tracker, staff_clf, re_id, registry, cfg.reid_threshold,
+                zone_mapper, state_machine,
                 known_track_ids,
             )
 

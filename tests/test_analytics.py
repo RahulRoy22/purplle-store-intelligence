@@ -355,10 +355,57 @@ class TestMetrics:
         assert resp.status_code == 200
         body = resp.json()
         required = {"store_id", "unique_visitors", "conversion_rate",
-                    "avg_dwell_ms", "billing_abandonment_rate", "checked_at"}
+                    "avg_dwell_ms", "avg_dwell_per_zone", "queue_depth",
+                    "billing_abandonment_rate", "checked_at"}
         missing = required - body.keys()
         assert not missing, f"Response missing fields: {missing}"
         assert body["store_id"] == STORE
+
+    async def test_metrics_avg_dwell_per_zone_computed(self, ac):
+        """
+        T2: avg_dwell_per_zone must be a per-zone map computed from ZONE_DWELL
+        events (staff excluded), distinct from the global avg_dwell_ms.
+        """
+        client, db = ac
+        await _seed_events(db, [
+            _evt("vis_001", "ZONE_DWELL", "zone_skincare", dwell_ms=100_000, ts_offset_secs=60),
+            _evt("vis_002", "ZONE_DWELL", "zone_skincare", dwell_ms=200_000, ts_offset_secs=70),
+            _evt("vis_003", "ZONE_DWELL", "zone_makeup",   dwell_ms=60_000,  ts_offset_secs=80),
+            # staff dwell must NOT affect the per-zone average
+            _evt("staff_1", "ZONE_DWELL", "zone_skincare", dwell_ms=9_000_000,
+                 ts_offset_secs=90, is_staff=True),
+        ])
+        resp = await client.get(f"/stores/{STORE}/metrics")
+        assert resp.status_code == 200
+        body = resp.json()
+        per_zone = body["avg_dwell_per_zone"]
+        assert isinstance(per_zone, dict) and per_zone, "avg_dwell_per_zone must be a non-empty map"
+        # skincare = mean(100000, 200000) = 150000 (staff 9,000,000 excluded)
+        assert per_zone["zone_skincare"] == 150_000.0, per_zone
+        assert per_zone["zone_makeup"] == 60_000.0, per_zone
+
+    async def test_metrics_queue_depth_is_most_recent_join(self, ac):
+        """T2: queue_depth = the most-recent BILLING_QUEUE_JOIN's queue_depth (int)."""
+        import json as _json
+        client, db = ac
+        events = []
+        for i, depth in enumerate([3, 9]):   # later event (offset bigger) wins
+            e = _evt(f"vis_{i}", "BILLING_QUEUE_JOIN", "zone_billing", ts_offset_secs=i * 600)
+            e["metadata"] = _json.dumps({"queue_depth": depth, "sku_zone": None, "session_seq": 1})
+            events.append(e)
+        await _seed_events(db, events)
+        resp = await client.get(f"/stores/{STORE}/metrics")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["queue_depth"] == 9, f"queue_depth must be the latest join's depth, got {body['queue_depth']}"
+        assert isinstance(body["queue_depth"], int)
+
+    async def test_metrics_queue_depth_defaults_zero(self, ac):
+        """T2: with no billing joins, queue_depth defaults to integer 0."""
+        client, _ = ac
+        resp = await client.get(f"/stores/{STORE}/metrics")
+        assert resp.status_code == 200
+        assert resp.json()["queue_depth"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -670,6 +717,66 @@ class TestAnomalies:
         body = resp.json()
         assert len(body["anomalies"]) > 0, (
             "High abandonment rate (5/6 visitors abandon queue) must trigger an anomaly"
+        )
+
+    async def test_anomalies_moderate_queue_depth_is_info(self, ac):
+        """
+        T1: average queue depth in (3, 5] must emit an INFO anomaly — exercises
+        the INFO severity path (the system uses all of INFO/WARN/CRITICAL).
+        """
+        import json
+        client, db = ac
+        events = []
+        for i in range(4):
+            e = _evt(f"vis_{i:03d}", "BILLING_QUEUE_JOIN", "zone_billing", ts_offset_secs=i * 60)
+            e["metadata"] = json.dumps({"queue_depth": 4, "sku_zone": None, "session_seq": 1})
+            events.append(e)
+        await _seed_events(db, events)
+        resp = await client.get(f"/stores/{STORE}/anomalies")
+        assert resp.status_code == 200
+        q = [a for a in resp.json()["anomalies"] if a["type"] == "HIGH_QUEUE_DEPTH"]
+        assert q, "Moderate queue depth (avg=4) must emit a HIGH_QUEUE_DEPTH anomaly"
+        assert q[0]["severity"] == "INFO", f"avg depth 4 must be INFO, got {q[0]['severity']}"
+
+    async def test_anomalies_dead_zone_fires(self, ac):
+        """
+        T1: a zone whose last visit is >30 min before the store's LATEST event
+        must emit a DEAD_ZONE (WARN) anomaly with zone_id, gap minutes, and a
+        suggested_action. Anchored to store_now, not wall-clock.
+        """
+        client, db = ac
+        await _seed_events(db, [
+            # zone_fragrance visited only early
+            _evt("vis_001", "ZONE_ENTER", "zone_fragrance", ts_offset_secs=0),
+            # later activity elsewhere defines store_now (+50 min)
+            _evt("vis_002", "ENTRY",      "zone_entry",  ts_offset_secs=3000),
+            _evt("vis_002", "ZONE_ENTER", "zone_makeup", ts_offset_secs=3000),
+        ])
+        resp = await client.get(f"/stores/{STORE}/anomalies")
+        assert resp.status_code == 200
+        dz = [a for a in resp.json()["anomalies"] if a["type"] == "DEAD_ZONE"]
+        assert len(dz) == 1, f"Exactly one DEAD_ZONE expected (fragrance), got {dz}"
+        assert dz[0]["zone_id"] == "zone_fragrance"
+        assert dz[0]["severity"] == "WARN"
+        assert dz[0]["value"] > 30, "gap must exceed the 30-minute threshold"
+        assert dz[0]["suggested_action"], "DEAD_ZONE must carry a suggested_action"
+
+    async def test_anomalies_conversion_drop_empty_without_history(self, ac):
+        """
+        T1: with only a single day of data there is no prior-7-day baseline,
+        so CONVERSION_DROP must NOT be emitted (we never fabricate a drop).
+        """
+        client, db = ac
+        await _seed_events(db, [
+            _evt("vis_001", "ENTRY",              "zone_entry",  ts_offset_secs=0),
+            _evt("vis_001", "BILLING_QUEUE_JOIN", "zone_billing", ts_offset_secs=600),
+        ])
+        await _seed_pos(db, [_pos(ts_offset_secs=700)])   # a real conversion today
+        resp = await client.get(f"/stores/{STORE}/anomalies")
+        assert resp.status_code == 200
+        types = [a["type"] for a in resp.json()["anomalies"]]
+        assert "CONVERSION_DROP" not in types, (
+            "CONVERSION_DROP requires multi-day history; must stay empty on one day"
         )
 
     async def test_anomalies_response_schema(self, ac):

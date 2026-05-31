@@ -47,7 +47,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from reid import ReIdentifier
+from reid import ReIdentifier, SharedRegistry
 
 
 # ---------------------------------------------------------------------------
@@ -269,3 +269,71 @@ class TestForget:
 
         assert reid.identify(E_X) is None      # vis_001 gone
         assert reid.identify(E_Y) == "vis_002" # vis_002 untouched
+
+
+# ---------------------------------------------------------------------------
+# SharedRegistry — cross-process (cross-camera) identity sharing via SQLite
+# ---------------------------------------------------------------------------
+
+class TestSharedRegistry:
+    """
+    SharedRegistry is the cross-camera fix for double-counting: a visitor
+    registered by ONE camera process must be looked up by ANOTHER process
+    pointed at the same DB. We simulate the two camera processes with two
+    independent SharedRegistry instances over one temp SQLite file.
+    """
+
+    def test_lookup_across_two_instances_same_db(self, tmp_path):
+        db = str(tmp_path / "shared.db")
+
+        # Camera A registers a brand-new visitor.
+        cam_a = SharedRegistry("STORE_BLR_002", db_path=db)
+        assert cam_a.lookup(E_X, threshold=0.85) is None, "empty registry → no match"
+        cam_a.register("vis_001", E_X)
+
+        # Camera B starts fresh against the SAME DB and must SEE vis_001
+        # (proves the registration was persisted and is shared cross-process).
+        cam_b = SharedRegistry("STORE_BLR_002", db_path=db)
+        assert cam_b.lookup(E_X, threshold=0.85) == "vis_001", (
+            "Camera B must resolve the same person to the visitor_id Camera A "
+            "registered — otherwise the visitor is double-counted across cameras"
+        )
+
+    def test_lookup_below_threshold_returns_none_cross_instance(self, tmp_path):
+        db = str(tmp_path / "shared.db")
+        cam_a = SharedRegistry("STORE_BLR_002", db_path=db)
+        cam_a.register("vis_001", E_X)
+
+        cam_b = SharedRegistry("STORE_BLR_002", db_path=db)
+        # Orthogonal embedding (sim 0.0) is below threshold → treated as new.
+        assert cam_b.lookup(E_Y, threshold=0.85) is None
+
+    def test_store_isolation(self, tmp_path):
+        """A registration for one store must not leak into another store."""
+        db = str(tmp_path / "shared.db")
+        SharedRegistry("STORE_A", db_path=db).register("vis_001", E_X)
+
+        other = SharedRegistry("STORE_B", db_path=db)
+        assert other.lookup(E_X, threshold=0.85) is None, (
+            "Embeddings must be scoped per store_id"
+        )
+
+    def test_table_created_when_absent(self, tmp_path):
+        """
+        __init__ must create visitor_embeddings if the DB has never been
+        touched by the API, so register()/_write_to_db never silently no-ops.
+        """
+        import sqlite3
+        db = str(tmp_path / "fresh.db")
+        reg = SharedRegistry("STORE_BLR_002", db_path=db)
+        reg.register("vis_001", E_X)
+
+        con = sqlite3.connect(db)
+        try:
+            rows = con.execute(
+                "SELECT visitor_id FROM visitor_embeddings WHERE store_id = ?",
+                ("STORE_BLR_002",),
+            ).fetchall()
+        finally:
+            con.close()
+        assert rows == [("vis_001",)], "registration must persist to a created table"

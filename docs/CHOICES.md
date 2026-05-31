@@ -159,6 +159,90 @@ The solution was verified with three boundary tests:
 
 ---
 
+## Phase 4 — CV Pipeline
+
+### Decision 5: YOLOv8n (nano) as the detection backbone
+
+**Context**
+
+The pipeline has to detect people in 1080p CCTV at roughly 15 FPS, on a retail back-office box with **no GPU guarantee**. Detection is the per-frame hot path: it runs on every frame of every camera, so its cost sets the ceiling for how many cameras one machine can serve. I needed the smallest model that still detects partially-occluded, small-in-frame people reliably enough for tracking to stay locked on.
+
+**Alternatives Considered**
+
+| Option | Upside | Downside |
+|---|---|---|
+| **YOLOv8n** | ~3.2M params; real-time on CPU (~15–25 FPS @ 640 on a modern x86 core); weights auto-download; ByteTrack ships in the same `ultralytics` package | Lower mAP than larger variants on small/occluded persons |
+| YOLOv8s | +6–8 mAP over nano | ~3× the FLOPs — drops well below real-time on CPU once you run 5 cameras |
+| YOLOv9 / RT-DETR | State-of-the-art accuracy | Heavier; RT-DETR is transformer-based and effectively needs a GPU for our FPS; more dependency/version surface |
+| MediaPipe Pose/Detector | Very fast, CPU-friendly | Tuned for close-range single-subject (selfie/fitness), not multi-person wide-angle CCTV; poor at small/occluded people |
+
+**What the AI suggested**
+
+The AI initially reached for YOLOv8s "for better accuracy," reasoning that retail occlusion is hard and a bigger model would reduce missed detections.
+
+**What I chose, and why**
+
+I overruled it and picked **YOLOv8n**. The deciding factor is the deployment constraint, not the benchmark leaderboard: we run **five cameras** on a CPU-first box. v8s would force either a GPU requirement (breaking the "runs anywhere" promise) or a frame-skip that hurts ByteTrack's continuity more than nano's lower mAP does. Two design choices buy back nano's accuracy gap:
+
+- **Tracking smooths detection noise.** ByteTrack associates across frames using both high- and low-confidence boxes, so a person missed in one frame is recovered from the track — we don't need a perfect per-frame detector, we need a *consistent* one.
+- **A deliberately low confidence threshold.** I run detection at conf ≈ 0.25 (classes filtered to COCO person only). On CCTV I would rather over-detect and let ByteTrack + the Re-ID gate reject spurious boxes than miss a real visitor and undercount footfall — undercounting directly corrupts the unique-visitor and funnel metrics the API exists to report.
+
+If a GPU becomes available per store, the model name is a single env var (`YOLO_WEIGHTS=yolov8s.pt`) — nothing else changes. So this is a reversible default tuned for the worst-case (CPU) environment, not a one-way door.
+
+**Decision status:** Stable. Default `yolov8n.pt`, conf ≈ 0.25, person-class only, ByteTrack via `ultralytics .track(persist=True)`.
+
+---
+
+### Decision 6: One event per zone transition, with `is_staff` emitted (not suppressed)
+
+**Context**
+
+The pipeline turns continuous tracks into a discrete event stream the API can aggregate. I had to decide the *grain* of that stream (how often we emit, and on what), and how to represent things the pipeline can infer but isn't certain about (staff vs. customer).
+
+**Alternatives Considered**
+
+| Option | Upside | Downside |
+|---|---|---|
+| **One event per zone transition** (ENTER/DWELL/EXIT, plus ENTRY/EXIT/billing) | Compact; each row is a meaningful state change; trivially aggregatable in SQL | Needs a per-track state machine to debounce jitter at zone borders |
+| One event per frame | No state machine; raw fidelity | ~15 rows/sec/person — millions of rows/day; pushes all aggregation cost downstream; mostly redundant |
+| Periodic snapshots (every N s) | Bounded volume | Misses fast transitions; arbitrary N; still redundant while a person stands still |
+
+**What the AI suggested**
+
+The AI proposed filtering staff out **inside the pipeline** ("don't even emit staff events — the API only cares about customers") and emitting one event per frame for "maximum downstream flexibility."
+
+**What I chose, and why**
+
+I rejected both halves and settled on **one event per zone transition, with staff emitted and filtered at the API**. The rationale:
+
+- **Grain = transition.** A visitor's behaviour *is* a sequence of zone transitions (entered skincare, dwelled 4 min, left, joined billing). Emitting on transition makes every row semantically meaningful and lets the API answer dwell/heatmap/funnel questions with plain `GROUP BY` — no windowing over frame spam. The `TrackStateMachine` debounces border jitter so we don't emit ENTER/EXIT flicker.
+- **`is_staff` is emitted, never suppressed.** Staff classification (HSV) is a *heuristic and will be wrong sometimes*. If the pipeline drops staff events, a misclassified customer is **silently and permanently lost** from every metric, and there's no way to audit or correct it. By emitting the flag and filtering with `WHERE is_staff = 0` at query time, the raw log stays forensically complete: we can re-tune the classifier, re-run analytics, or expose a staff-inclusive view later without re-ingesting anything. Classification confidence and filtering policy belong at the analytics edge, not baked irreversibly into capture.
+- **`session_seq`** disambiguates a returning visitor: when Re-ID matches someone who already left, the new visit carries `session_seq = 2, 3, …` so REENTRY is distinguishable from a continuous session while `COUNT(DISTINCT visitor_id)` still counts the person once.
+- **`zone_id` is null for ENTRY/EXIT** by design: those events mark the store boundary (the turnstile/door), which is not a merchandising zone. Forcing a sentinel zone there would pollute heatmap/dwell aggregates; `NULL` lets the zone queries ignore them naturally (`WHERE zone_id IS NOT NULL`).
+- **Metadata is an open block.** `metadata` carries `queue_depth`, `sku_zone`, etc. as JSON with `extra="allow"`, so new signals (e.g. shelf-interaction counts) slot in without a schema migration or breaking existing callers.
+
+**Decision status:** Stable. Implemented across `state_machine.py` (transition synthesis) and the API's read-time `is_staff = 0` filter.
+
+---
+
+### Decision 7: Staff classifier is a fixed HSV uniform mask — a deliberate, replaceable shortcut
+
+**Context**
+
+Staff must be separable from customers so they don't inflate footfall and dwell. The brief's footage has **varying lighting**, which is exactly the condition under which colour-based classification is weakest.
+
+**The trade-off I took (and its limits)**
+
+The classifier flags a crop as staff when the fraction of pixels inside a fixed HSV range (the store's blue uniform, H ≈ 100–130) exceeds `STAFF_THRESHOLD`. I chose this knowingly as a **fast, dependency-free, CPU-only first cut**, not as the final answer:
+
+- **Why it's acceptable now:** it adds zero model-load cost, runs per-crop in microseconds, is fully tunable per store via env vars, and a uniform is genuinely the strongest single cue for retail staff.
+- **Where it breaks:** white/quartz-halogen vs. warm LED lighting shifts measured hue; a customer in a blue jacket false-positives; a staffer holding stock in front of their torso false-negatives. A *fixed* HSV band cannot adapt to these.
+- **How I'd evaluate/replace it (likely follow-up):** first, **measure** — hand-label a few hundred crops across the lighting conditions in the footage and track precision/recall, because we currently have no number for how often it's wrong. Cheap robustness wins: convert to **HSV and key on Hue/Saturation only** (drop Value) to reduce brightness sensitivity, or **white-balance/normalise** each crop first. The principled replacement is a **small supervised classifier** (a tiny CNN head, or logistic regression on a colour histogram + the OSNet embedding we already compute) trained on those labels — it learns the uniform under real lighting instead of us guessing a band. Crucially, because **Decision 6 emits `is_staff` rather than suppressing it**, we can swap the classifier and re-run analytics on the existing event log with no re-capture.
+
+**Decision status:** Intentional MVP. The HSV bounds and threshold are env-configurable (`STAFF_HSV_LOWER/UPPER`, `STAFF_THRESHOLD`); the upgrade path is measurement-first, then a learned classifier.
+
+---
+
 ## Overarching Principles
 
 1. **Zero-touch startup is non-negotiable.** Every architectural decision is evaluated against "does this break `docker compose up`?"

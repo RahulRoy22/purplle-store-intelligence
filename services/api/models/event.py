@@ -72,16 +72,3 @@ class EventIn(BaseModel):
                 "timestamp must be timezone-aware (include UTC offset, e.g. +00:00)"
             )
         return v
-
-
-class RejectedEvent(BaseModel):
-    event_id: str | None
-    reason: str
-
-
-class IngestResponse(BaseModel):
-    trace_id: str
-    accepted: int
-    duplicate: int
-    rejected: list[RejectedEvent]
-    latency_ms: float

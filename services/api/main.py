@@ -11,6 +11,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 import aiosqlite
 from core.config import get_settings
+from db.events import batch_upsert
+from models.event import EventIn
+from pydantic import ValidationError
 from routers import health, ingest, stores, dashboard
 
 settings = get_settings()
@@ -262,14 +265,73 @@ async def load_pos_from_csv(db_path: str, csv_path: str) -> int:
     return rows_processed
 
 
+async def load_events_from_jsonl(db_path: str, jsonl_path: str) -> int:
+    """
+    Ingest seed events written by the `seed` service into the events table.
+
+    Each line is one JSON object validated with EventIn (the same schema the
+    /events/ingest endpoint enforces). Malformed lines are skipped with a
+    WARNING — a single bad line never aborts the load or 500s the startup.
+    Insertion goes through the existing idempotent batch_upsert (INSERT OR
+    IGNORE on event_id), so this is safe to re-run on every container restart.
+
+    Returns the number of new rows inserted.
+    """
+    p = pathlib.Path(jsonl_path)
+    if not p.exists():
+        logger.info("Seed events file not found at %s — skipping load", jsonl_path)
+        return 0
+
+    valid: list[EventIn] = []
+    skipped = 0
+    with p.open(encoding="utf-8") as f:
+        for lineno, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                valid.append(EventIn.model_validate_json(line))
+            except (ValidationError, ValueError) as exc:
+                skipped += 1
+                logger.warning(
+                    "Seed events line %d skipped — %s", lineno, exc
+                )
+
+    if not valid:
+        logger.info("Seed events: 0 valid rows in %s (%d skipped)", jsonl_path, skipped)
+        return 0
+
+    result = await batch_upsert(db_path, valid)
+    logger.info(
+        "Seed events load complete: %d inserted, %d duplicate, %d skipped",
+        result["inserted"], result["duplicate"], skipped,
+    )
+    return result["inserted"]
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up — ensuring DB schema")
     await init_db(settings.db_path)
     logger.info("DB schema ready at %s", settings.db_path)
+
+    # --- POS load (with fallback to the seeded mock CSV) -------------------
     if settings.pos_csv_path:
-        n = await load_pos_from_csv(settings.db_path, settings.pos_csv_path)
-        logger.info("Loaded %d POS rows from %s", n, settings.pos_csv_path)
+        pos_path = settings.pos_csv_path
+        if not pathlib.Path(pos_path).exists():
+            logger.warning(
+                "POS CSV %s not found — falling back to seeded mock CSV %s",
+                pos_path, settings.pos_fallback_csv_path,
+            )
+            pos_path = settings.pos_fallback_csv_path
+        n = await load_pos_from_csv(settings.db_path, pos_path)
+        logger.info("Loaded %d POS rows from %s", n, pos_path)
+
+    # --- Seed events auto-ingest (idempotent, safe on every restart) -------
+    if settings.seed_events_path:
+        n_evt = await load_events_from_jsonl(settings.db_path, settings.seed_events_path)
+        logger.info("Auto-ingested %d seed events from %s", n_evt, settings.seed_events_path)
+
     yield
     logger.info("Shutting down")
 

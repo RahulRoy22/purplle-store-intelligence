@@ -84,6 +84,22 @@ Conversion rate is computed with a pure SQL `JOIN` using SQLite's `unixepoch()` 
 
 ---
 
+### Billing Events: emit-raw, reconcile-in-analytics
+
+The pipeline emits a `BILLING_QUEUE_JOIN` on **every** entry into the billing zone and a `BILLING_QUEUE_ABANDON` on **every** billing-zone exit that is not followed by a correlated sale. It deliberately does **not** try to decide, at capture time, whether a given billing visit "really" ended in a purchase. That decision is made later, in the analytics layer, by correlating billing-zone dwell against POS transactions inside the 5-minute `unixepoch()` window.
+
+This is a conscious **"emit raw, reconcile in analytics"** split, and it mirrors the `is_staff` decision (raw flag emitted, filtered at read time):
+
+- **The pipeline cannot see the till.** It has no access to POS at capture time, so any purchase/abandon verdict it made would be a guess. Emitting the raw join/exit and reconciling against POS in SQL means the *authoritative* signal (an actual transaction) decides conversion, not a camera heuristic.
+- **It keeps the event log forensically complete and re-computable.** Because both the join and the exit are always recorded, the abandonment rate, conversion rate, and funnel are all derivable — and *re-derivable* — from the same immutable log. If we change the correlation window from 5 minutes to 3, or fix a POS import bug, we re-run the query; we never re-capture footage.
+- **Consequence we accept:** `BILLING_QUEUE_ABANDON` is an *upper bound* on true abandonment until POS reconciliation runs (a visitor who bought but whose POS row is delayed/missing looks like an abandon). The analytics layer treats POS as the source of truth and the billing events as the behavioural envelope around it. This behaviour is covered by existing tests and is intentionally **not** changed.
+
+### Anomaly detection anchoring (and the multi-day CONVERSION_DROP rule)
+
+All anomaly rules are anchored to **`store_now` = the store's latest non-staff event timestamp**, not wall-clock time. The datasets are historical/replayed, so a wall-clock "is this zone stale?" check would fire on *every* zone the moment the feed stopped. Anchoring to the latest event makes "dead zone" mean "unvisited relative to the rest of the store's activity," which is the question that actually matters.
+
+`CONVERSION_DROP` compares the conversion rate on `store_now`'s day against the average of the **prior 7 days**. This rule **requires multi-day history**: with a single day of seeded data there is no prior baseline, so the rule emits **nothing** rather than fabricating a drop. This is by design — surfacing a "drop" with no baseline would be exactly the kind of input-independent output the integrity check warns against. On a real deployment accumulating days of events, the same code begins emitting `CONVERSION_DROP` automatically once ≥1 prior day of footfall exists.
+
 ## AI-Assisted Decisions
 
 Three design decisions were shaped in direct collaboration with the LLM and are documented here because the AI's reasoning changed the final implementation in non-obvious ways.
