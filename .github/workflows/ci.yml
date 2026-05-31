@@ -33,7 +33,7 @@ jobs:
 
       - name: Install pipeline dependencies
         run: |
-          pip install numpy
+          pip install numpy shapely opencv-python-headless httpx pytest-httpx
 
       - name: Run pipeline tests
         run: |
