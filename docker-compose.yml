@@ -5,11 +5,14 @@ services:
     volumes:
       - ./data/mock:/data/mock
       - ./data/generated:/data/generated
+    # No `pip install` step: the generators use only the Python stdlib
+    # (random/uuid), so the seed service needs no network access at startup.
+    # Order matters — events are generated BEFORE POS so the POS generator can
+    # place transactions inside real billing-queue windows (computed conversion).
     command: >
-      sh -c "pip install faker --quiet &&
-             python /data/mock/generate_store_layout.py &&
-             python /data/mock/generate_pos_transactions.py &&
+      sh -c "python /data/mock/generate_store_layout.py &&
              python /data/mock/generate_sample_events.py &&
+             python /data/mock/generate_pos_transactions.py &&
              echo '[seed] Done.'"
 
   api:
@@ -31,7 +34,7 @@ services:
     environment:
       - DB_PATH=/data/store_intelligence.db
       - LOG_LEVEL=INFO
-      - STORE_ID=store_001
+      - STORE_ID=STORE_BLR_002
       - STALE_FEED_THRESHOLD_MINUTES=10
       # Switch from the mock CSV to the real organiser-provided POS data.
       # Comment out or set to "" to fall back to the seeded mock data.

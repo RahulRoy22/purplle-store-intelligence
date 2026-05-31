@@ -26,7 +26,7 @@ OUTPUT = pathlib.Path(__file__).parent.parent / "generated" / "store_layout.json
 OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 
 layout = {
-    "store_id": "store_001",
+    "store_id": "STORE_BLR_002",
     "store_name": "Purplle Flagship — Koramangala",
     "total_area_sqft": 3200,
     "zones": [

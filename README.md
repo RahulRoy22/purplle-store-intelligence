@@ -22,7 +22,7 @@ docker compose up --build -d
 curl http://localhost:8000/health
 
 # 5. Query live analytics
-curl http://localhost:8000/stores/store_001/metrics
+curl http://localhost:8000/stores/STORE_BLR_002/metrics
 ```
 
 Expected `/health` response:
@@ -117,7 +117,8 @@ cd services/pipeline
 VIDEO_SOURCE="../../data/resource/CCTV Footage/CAM 1.mp4" \
 CAMERA_ID=cam_entry \
 LAYOUT_PATH=../../data/resource/camera_1_layout.json \
-STORE_ID=store_001 \
+STORE_ID=STORE_BLR_002 \
+DB_PATH=/data/store_intelligence.db \
 API_URL=http://localhost:8000 \
 python main.py
 ```
@@ -147,12 +148,12 @@ All data comes from the same REST endpoints; the page uses plain JavaScript `fet
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Service health + last event timestamp |
+| GET | `/health` | Service health + last event timestamp, global and **per store** |
 | POST | `/events/ingest` | Ingest a batch of CV events (idempotent) |
-| GET | `/stores/{id}/metrics` | KPI snapshot: visitors, conversion, dwell, abandonment |
+| GET | `/stores/{id}/metrics` | KPI snapshot: visitors, conversion, **per-zone dwell**, **current queue depth**, abandonment |
 | GET | `/stores/{id}/funnel` | Entry → browse → billing → purchase funnel |
 | GET | `/stores/{id}/heatmap` | Zone visit frequency and heat score (0–100) |
-| GET | `/stores/{id}/anomalies` | Rule-based alerts (queue depth, abandonment rate) |
+| GET | `/stores/{id}/anomalies` | Rule-based alerts: queue depth, abandonment, **dead zone**, **conversion drop** |
 
 Full interactive documentation: http://localhost:8000/docs
 
@@ -216,7 +217,7 @@ purplle-store-intelligence/
 
 | Variable | Default | Description |
 |---|---|---|
-| `STORE_ID` | `store_001` | Store identifier written to every event |
+| `STORE_ID` | `STORE_BLR_002` | Store identifier written to every event |
 | `API_URL` | `http://localhost:8000` | API base URL (pipeline → API) |
 | `DB_PATH` | `/data/store_intelligence.db` | SQLite database path |
 | `POS_CSV_PATH` | *(none)* | Path to POS transactions CSV |

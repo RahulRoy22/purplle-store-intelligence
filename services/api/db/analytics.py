@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import aiosqlite
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 
 async def get_metrics(db_path: str, store_id: str) -> dict:
@@ -66,6 +66,49 @@ async def get_metrics(db_path: str, store_id: str) -> dict:
         ) as cur:
             avg_dwell_raw = (await cur.fetchone())[0]
 
+        # Average dwell PER ZONE (customers only, ZONE_DWELL events)
+        async with db.execute(
+            """
+            SELECT zone_id, AVG(CAST(dwell_ms AS REAL))
+            FROM   events
+            WHERE  store_id   = ? AND is_staff = 0
+              AND  event_type = 'ZONE_DWELL'
+              AND  dwell_ms   IS NOT NULL
+              AND  zone_id    IS NOT NULL
+            GROUP BY zone_id
+            """,
+            (store_id,),
+        ) as cur:
+            avg_dwell_per_zone = {
+                row[0]: round(row[1], 2)
+                for row in await cur.fetchall()
+                if row[1] is not None
+            }
+
+        # Current billing queue depth = the most-recent BILLING_QUEUE_JOIN's
+        # metadata.queue_depth for this store (by timestamp). Default 0.
+        queue_depth = 0
+        async with db.execute(
+            """
+            SELECT metadata
+            FROM   events
+            WHERE  store_id   = ? AND is_staff = 0
+              AND  event_type = 'BILLING_QUEUE_JOIN'
+              AND  metadata   IS NOT NULL
+            ORDER BY timestamp DESC
+            LIMIT 1
+            """,
+            (store_id,),
+        ) as cur:
+            row = await cur.fetchone()
+        if row and row[0]:
+            try:
+                meta = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                if meta and meta.get("queue_depth") is not None:
+                    queue_depth = int(meta["queue_depth"])
+            except (json.JSONDecodeError, TypeError, AttributeError, ValueError):
+                queue_depth = 0
+
         # Billing abandonment rate
         async with db.execute(
             """
@@ -88,6 +131,8 @@ async def get_metrics(db_path: str, store_id: str) -> dict:
         "unique_visitors": unique_visitors,
         "conversion_rate": round(conversion_rate, 4),
         "avg_dwell_ms": round(avg_dwell_raw, 2) if avg_dwell_raw is not None else None,
+        "avg_dwell_per_zone": avg_dwell_per_zone,
+        "queue_depth": queue_depth,
         "billing_abandonment_rate": round(abandonment_rate, 4),
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -242,21 +287,85 @@ async def get_heatmap(db_path: str, store_id: str) -> dict:
     }
 
 
+DEAD_ZONE_GAP_MINUTES = 30          # zone is "dead" if unvisited this long
+CONVERSION_DROP_RELATIVE = 0.20     # ≥20% relative drop vs prior-7-day baseline
+
+
+async def _day_conversion(db, store_id: str, day: str) -> tuple[int, int]:
+    """
+    Return (unique_visitors, converted_visitors) for a single UTC date string
+    ('YYYY-MM-DD'). Conversion uses the same 5-minute billing→POS window as the
+    main metric. Staff excluded. Used by the CONVERSION_DROP day-over-day rule.
+    """
+    async with db.execute(
+        """
+        SELECT COUNT(DISTINCT visitor_id)
+        FROM   events
+        WHERE  store_id = ? AND is_staff = 0
+          AND  event_type IN ('ENTRY', 'REENTRY')
+          AND  date(timestamp) = ?
+        """,
+        (store_id, day),
+    ) as cur:
+        visitors = (await cur.fetchone())[0] or 0
+
+    converted = 0
+    if visitors:
+        try:
+            async with db.execute(
+                """
+                SELECT COUNT(DISTINCT e.visitor_id)
+                FROM   events           e
+                JOIN   pos_transactions p ON p.store_id = e.store_id
+                WHERE  e.store_id = ? AND e.is_staff = 0
+                  AND  e.zone_id  = 'zone_billing'
+                  AND  date(e.timestamp) = ?
+                  AND  unixepoch(p.timestamp) >= unixepoch(e.timestamp)
+                  AND  unixepoch(p.timestamp) -  unixepoch(e.timestamp) <= 300
+                """,
+                (store_id, day),
+            ) as cur:
+                converted = (await cur.fetchone())[0] or 0
+        except Exception:
+            converted = 0
+    return visitors, converted
+
+
 async def get_anomalies(db_path: str, store_id: str) -> dict:
     """
-    Rule-based anomaly detection.
+    Rule-based anomaly detection. All rules are anchored to the store's LATEST
+    event timestamp ("store_now"), NOT wall-clock — the data is historical, so
+    a wall-clock comparison would misfire on every replayed dataset.
 
-    Thresholds:
-      Queue depth avg > 10  → CRITICAL
-      Queue depth avg >  5  → WARN
-      Abandonment rate > 50% → WARN
+    Rules:
+      HIGH_QUEUE_DEPTH   avg billing queue depth  > 10 → CRITICAL
+                                                  >  5 → WARN
+                                                  >  3 → INFO
+      HIGH_ABANDONMENT   billing abandonment rate > 50%        → WARN
+      DEAD_ZONE          a visited zone untouched > 30 min     → WARN
+      CONVERSION_DROP    today's conversion ≥20% below the
+                         prior-7-day average                   → WARN
     """
     anomalies: list[dict] = []
     checked_at = datetime.now(timezone.utc).isoformat()
 
     async with aiosqlite.connect(db_path) as db:
 
-        # ── Queue depth ────────────────────────────────────────────────────
+        # ── Anchor: store_now = latest non-staff event timestamp ───────────
+        async with db.execute(
+            "SELECT MAX(timestamp) FROM events WHERE store_id = ? AND is_staff = 0",
+            (store_id,),
+        ) as cur:
+            row = await cur.fetchone()
+            store_now_raw = row[0] if row else None
+
+        if not store_now_raw:
+            # No data for this store → nothing to compute, nothing to fabricate.
+            return {"store_id": store_id, "anomalies": [], "checked_at": checked_at}
+
+        store_now = datetime.fromisoformat(store_now_raw)
+
+        # ── Queue depth (average over all billing joins) ───────────────────
         async with db.execute(
             """
             SELECT metadata
@@ -310,6 +419,21 @@ async def get_anomalies(db_path: str, store_id: str) -> dict:
                         "nearby floor staff to assist."
                     ),
                 })
+            elif avg_depth > 3:
+                anomalies.append({
+                    "type": "HIGH_QUEUE_DEPTH",
+                    "severity": "INFO",
+                    "zone_id": "zone_billing",
+                    "value": round(avg_depth, 1),
+                    "message": (
+                        f"Average billing queue depth {avg_depth:.1f} is moderate — "
+                        "within tolerance but worth monitoring during peak hours."
+                    ),
+                    "suggested_action": (
+                        "No immediate action needed. Keep an eye on the queue if "
+                        "footfall continues to rise."
+                    ),
+                })
 
         # ── Billing abandonment ────────────────────────────────────────────
         async with db.execute(
@@ -342,6 +466,74 @@ async def get_anomalies(db_path: str, store_id: str) -> dict:
                         "Investigate wait time at billing counters. "
                         "Consider adding self-checkout or express-lane options "
                         "to reduce drop-off."
+                    ),
+                })
+
+        # ── Dead zones (anchored to store_now, not wall-clock) ─────────────
+        async with db.execute(
+            """
+            SELECT zone_id, MAX(timestamp)
+            FROM   events
+            WHERE  store_id = ? AND is_staff = 0 AND zone_id IS NOT NULL
+            GROUP BY zone_id
+            """,
+            (store_id,),
+        ) as cur:
+            zone_rows = await cur.fetchall()
+
+        for zone_id, last_ts_raw in zone_rows:
+            if not last_ts_raw:
+                continue
+            gap_min = (store_now - datetime.fromisoformat(last_ts_raw)).total_seconds() / 60
+            if gap_min > DEAD_ZONE_GAP_MINUTES:
+                anomalies.append({
+                    "type": "DEAD_ZONE",
+                    "severity": "WARN",
+                    "zone_id": zone_id,
+                    "value": round(gap_min, 1),
+                    "message": (
+                        f"Zone '{zone_id}' has had no visitor activity for "
+                        f"{gap_min:.0f} minutes (last seen at {last_ts_raw}) while the "
+                        "store is still active — it may be poorly signposted or blocked."
+                    ),
+                    "suggested_action": (
+                        f"Send a floor associate to check '{zone_id}'. Review signage, "
+                        "lighting, and product placement; consider a promo to draw footfall."
+                    ),
+                })
+
+        # ── Conversion drop vs prior-7-day baseline ────────────────────────
+        # Requires multi-day history. With a single day of data there is no
+        # prior baseline, so nothing is emitted (we never fabricate a drop).
+        today = store_now.date().isoformat()
+        today_visitors, today_converted = await _day_conversion(db, store_id, today)
+
+        prior_rates: list[float] = []
+        if today_visitors:
+            for d in range(1, 8):
+                day = (store_now.date() - timedelta(days=d)).isoformat()
+                v, c = await _day_conversion(db, store_id, day)
+                if v > 0:
+                    prior_rates.append(c / v)
+
+        if today_visitors and prior_rates:
+            today_rate = today_converted / today_visitors
+            baseline = sum(prior_rates) / len(prior_rates)
+            if baseline > 0 and today_rate <= baseline * (1 - CONVERSION_DROP_RELATIVE):
+                drop_pct = (baseline - today_rate) / baseline * 100
+                anomalies.append({
+                    "type": "CONVERSION_DROP",
+                    "severity": "WARN",
+                    "zone_id": None,
+                    "value": round(drop_pct, 1),
+                    "message": (
+                        f"Today's conversion rate {today_rate * 100:.1f}% is {drop_pct:.0f}% "
+                        f"below the prior-7-day average of {baseline * 100:.1f}% — "
+                        "a material drop in purchase rate."
+                    ),
+                    "suggested_action": (
+                        "Check for billing outages, stock-outs, or staffing gaps today. "
+                        "Compare footfall and queue metrics against the baseline period."
                     ),
                 })
 

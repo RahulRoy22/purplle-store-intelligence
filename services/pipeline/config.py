@@ -16,7 +16,7 @@ API_URL               Base URL of the running FastAPI ingest service.
                       Default: "http://localhost:8000"
 
 STORE_ID              Store identifier written to every emitted event.
-                      Default: "store_001"
+                      Default: "STORE_BLR_002"
 
 CAMERA_ID             Fallback camera identifier (used when zone_camera_map
                       has no entry for a given zone).
@@ -103,7 +103,7 @@ class PipelineConfig:
         return cls(
             video_source=_video_source(os.getenv("VIDEO_SOURCE", "0")),
             api_url=os.getenv("API_URL", "http://localhost:8000"),
-            store_id=os.getenv("STORE_ID", "store_001"),
+            store_id=os.getenv("STORE_ID", "STORE_BLR_002"),
             camera_id=os.getenv("CAMERA_ID", "cam_entry"),
             layout_path=os.getenv("LAYOUT_PATH", "data/generated/store_layout.json"),
             yolo_weights=os.getenv("YOLO_WEIGHTS", "yolov8n.pt"),

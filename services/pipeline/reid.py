@@ -49,13 +49,41 @@ class SharedRegistry:
 
     _REFRESH_INTERVAL = 60  # seconds
 
+    # DDL for the embeddings table. Kept here (not only in the API) so a camera
+    # process that starts BEFORE the API has ever run can still persist/share
+    # embeddings — otherwise _write_to_db() would silently no-op against a
+    # missing table and cross-camera Re-ID would degrade to per-process.
+    _DDL = """
+    CREATE TABLE IF NOT EXISTS visitor_embeddings (
+        visitor_id  TEXT PRIMARY KEY,
+        store_id    TEXT NOT NULL,
+        embedding   BLOB NOT NULL,
+        created_at  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ve_store
+        ON visitor_embeddings(store_id, created_at DESC);
+    """
+
     def __init__(self, store_id: str, db_path: Optional[str] = None) -> None:
         self._store_id = store_id
         self._db_path = db_path or os.environ.get("DB_PATH", "/data/store_intelligence.db")
         self._lock = threading.Lock()
         self._cache: dict[str, np.ndarray] = {}
         self._last_refresh: float = 0.0
+        self._ensure_table()
         self._load_from_db()
+
+    def _ensure_table(self) -> None:
+        """Idempotently create visitor_embeddings if it does not exist yet."""
+        try:
+            con = sqlite3.connect(self._db_path, timeout=5)
+            try:
+                con.executescript(self._DDL)
+                con.commit()
+            finally:
+                con.close()
+        except Exception:
+            pass  # best-effort; in-memory cache still works for this process
 
     # ------------------------------------------------------------------
     # Public API

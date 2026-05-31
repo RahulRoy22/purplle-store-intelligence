@@ -7,7 +7,9 @@ class StoreMetrics(BaseModel):
     store_id: str
     unique_visitors: int
     conversion_rate: float
-    avg_dwell_ms: float | None
+    avg_dwell_ms: float | None                 # global avg dwell (back-compat)
+    avg_dwell_per_zone: dict[str, float]       # per-zone avg dwell (ms), staff-excluded
+    queue_depth: int                           # most-recent billing queue depth
     billing_abandonment_rate: float | None
     checked_at: str
 

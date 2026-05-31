@@ -80,3 +80,42 @@ async def test_health_stale_feed(client: AsyncClient, tmp_db):
     assert body["stale_feed"] is True
     assert body["status"] == "degraded"
     assert body["last_event_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_health_per_store_breakdown(client: AsyncClient, tmp_db):
+    """
+    T3: /health must report last_event_at + stale_feed PER STORE (GROUP BY
+    store_id). Seed a fresh event for store A and a stale one for store B.
+    """
+    import aiosqlite
+    import uuid
+    from datetime import datetime, timezone, timedelta
+
+    fresh = datetime.now(timezone.utc).isoformat()
+    stale = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+
+    async with aiosqlite.connect(str(tmp_db)) as db:
+        await db.executemany(
+            """INSERT INTO events
+               (event_id, store_id, camera_id, visitor_id, event_type,
+                timestamp, is_staff, confidence, metadata)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            [
+                (str(uuid.uuid4()), "STORE_FRESH", "cam_entry", "v1", "ENTRY",
+                 fresh, 0, 0.9, "{}"),
+                (str(uuid.uuid4()), "STORE_STALE", "cam_entry", "v2", "ENTRY",
+                 stale, 0, 0.9, "{}"),
+            ],
+        )
+        await db.commit()
+
+    resp = await client.get("/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "stores" in body, "HealthResponse must include a per-store list"
+    by_id = {s["store_id"]: s for s in body["stores"]}
+    assert "STORE_FRESH" in by_id and "STORE_STALE" in by_id
+    assert by_id["STORE_FRESH"]["stale_feed"] is False
+    assert by_id["STORE_STALE"]["stale_feed"] is True
+    assert by_id["STORE_FRESH"]["last_event_at"] is not None
