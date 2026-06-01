@@ -132,18 +132,15 @@ A web dashboard is served directly by the API — no separate process needed.
 http://localhost:8000/dashboard
 ```
 
-Open that URL after `docker compose up` 
+Open that URL after `docker compose up` and you'll see a live-updating display:
 
 - **KPI cards** — unique visitors, conversion rate, avg dwell, billing abandonment
-- **Conversion funnel** — 4-stage percentage bar chart (Entry → Browse → Billing → Purchase)  
+- **Conversion funnel** — 4-stage percentage bar chart (Entry → Browse → Billing → Purchase)
 - **Zone heatmap** — colour-coded bars per zone with `data_confidence` badge (low / high)
 - **Anomaly panel** — severity-coded cards (CRITICAL / WARN / INFO) with `suggested_action`
 
-The dashboard renders from the analytics REST endpoints and updates in real time
-via Server-Sent Events: it subscribes to `GET /stores/{id}/stream`, and the API
-pushes a notification over that SSE channel after every successful event ingest,
-which triggers an immediate refresh — no polling. This proves the pipeline → API →
-UI path is live, not batch-replayed.
+Updates are push-based via Server-Sent Events (`GET /stores/{id}/stream`). The API broadcasts a notification after every successful ingest; the dashboard refreshes immediately on receipt — no polling interval.
+
 ---
 
 ## Analytics API Endpoints

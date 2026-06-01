@@ -1,15 +1,15 @@
 """
 routers/dashboard.py — Live web dashboard served at GET /dashboard
 
-A self-contained HTML page (Bootstrap 5 + vanilla JS) that polls the
-analytics API every 5 seconds and renders:
+A self-contained HTML page (Bootstrap 5 + vanilla JS) that renders:
   - KPI cards  (visitors, conversion, dwell, abandonment)
   - Conversion funnel (% bars)
   - Zone heatmap     (heat-coloured bars + data_confidence badge)
   - Anomaly panel    (severity-coded cards with suggested_action)
 
 No external build step, no React, no webpack — just one HTML response.
-The JS calls the same origin's REST endpoints directly.
+The JS subscribes to the SSE stream (`GET /stores/{id}/stream`) and refreshes
+on every push; no polling interval is used.
 """
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
