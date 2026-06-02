@@ -12,6 +12,7 @@ services:
     command: >
       sh -c "python /data/mock/generate_store_layout.py &&
              python /data/mock/generate_sample_events.py &&
+             python /data/mock/generate_extra_stores.py &&
              python /data/mock/generate_pos_transactions.py &&
              echo '[seed] Done.'"
 

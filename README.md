@@ -191,6 +191,8 @@ Open that URL after `docker compose up` and you'll see a live-updating display:
 
 Updates are push-based via Server-Sent Events (`GET /stores/{id}/stream`). The API broadcasts a notification after every successful ingest; the dashboard refreshes immediately on receipt — no polling interval.
 
+**Store selector (multi-store).** The navbar dropdown is populated from `/health`'s per-store list; selecting a store re-fetches every panel and re-subscribes its live stream, so one dashboard serves the whole chain without clutter. For illustration the seed generates **three synthetic stores** (`STORE_BLR_002`, `STORE_DEL_001`, `STORE_MUM_003` — see `data/mock/generate_extra_stores.py`), each with its own computed conversion/funnel/anomalies. These are clearly generated demo data; real stores appear in the dropdown automatically once their detection events are ingested.
+
 ---
 
 ## Analytics API Endpoints
