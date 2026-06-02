@@ -1,0 +1,106 @@
+{
+  "_comment": "Zone definitions for the two stores in the UPDATED organiser drop ('updated data/Store 1', 'updated data/Store 2'). Derived from the architectural floor-plan PNGs (Store 1 - layout.png, store 2 - layout.png) by prompting a vision-language model to read the brand/fixture labels and group them into ENTRY / FLOOR / BILLING zones, then mapping each zone to the camera clip that covers it. See docs/DESIGN.md 'AI-Assisted Decisions' for the exact VLM prompt. cameras[] values are the real clip filenames. These are reference layouts: pixel polygons for tracking are still calibrated per-camera against real frames via scripts/calibrate.py. Same schema as data/mock/generate_store_layout.py so data/mock/assertions.py::TestStoreLayout passes against either store.",
+  "stores": [
+    {
+      "store_id": "STORE_1",
+      "store_name": "Apex/Purplle — Store 1 (updated footage)",
+      "cameras": {
+        "CAM 1 - zone": "Main floor / wall shelves (left)",
+        "CAM 2 - zone": "Main floor / makeup units + lower wall",
+        "CAM 3 - entry": "Entry / exit threshold (glass door, left)",
+        "CAM 5 - billing": "Cash counter / billing area (right)"
+      },
+      "zones": [
+        {
+          "zone_id": "zone_entry",
+          "name": "Store Entry / Exit",
+          "category": "ENTRY",
+          "cameras": ["CAM 3 - entry"],
+          "adjacent_zones": ["zone_wall_shelves", "zone_fragrance_nail"]
+        },
+        {
+          "zone_id": "zone_wall_shelves",
+          "name": "Top Wall Shelves (Salm / TFS / Minimalist / Aqualogica / Foxtale / JC)",
+          "category": "FLOOR",
+          "cameras": ["CAM 1 - zone"],
+          "adjacent_zones": ["zone_entry", "zone_makeup_units"]
+        },
+        {
+          "zone_id": "zone_fragrance_nail",
+          "name": "Fragrance & Nail Unit (centre island)",
+          "category": "FLOOR",
+          "cameras": ["CAM 1 - zone"],
+          "adjacent_zones": ["zone_entry", "zone_makeup_units"]
+        },
+        {
+          "zone_id": "zone_makeup_units",
+          "name": "Makeup Units (centre)",
+          "category": "FLOOR",
+          "cameras": ["CAM 2 - zone"],
+          "adjacent_zones": ["zone_wall_shelves", "zone_lower_wall", "zone_billing"]
+        },
+        {
+          "zone_id": "zone_lower_wall",
+          "name": "Lower Wall Display (Faces / Mars+NyBae / Mens / L'Oreal / Beauty)",
+          "category": "FLOOR",
+          "cameras": ["CAM 2 - zone"],
+          "adjacent_zones": ["zone_makeup_units", "zone_billing"]
+        },
+        {
+          "zone_id": "zone_billing",
+          "name": "Cash Counter / Billing",
+          "category": "BILLING",
+          "cameras": ["CAM 5 - billing"],
+          "adjacent_zones": ["zone_makeup_units", "zone_lower_wall"]
+        }
+      ]
+    },
+    {
+      "store_id": "STORE_2",
+      "store_name": "Apex/Purplle — Store 2 (updated footage)",
+      "cameras": {
+        "entry 1.mp4": "Entrance threshold (camera A)",
+        "entry 2.mp4": "Entrance threshold (camera B, overlaps entry 1)",
+        "zone.mp4": "Main floor / wall units + makeup units",
+        "billing_area.mp4": "Cash counter / billing area (top centre)"
+      },
+      "zones": [
+        {
+          "zone_id": "zone_entry",
+          "name": "Store Entrance",
+          "category": "ENTRY",
+          "cameras": ["entry 1.mp4", "entry 2.mp4"],
+          "adjacent_zones": ["zone_wall_units_left", "zone_wall_units_right"]
+        },
+        {
+          "zone_id": "zone_wall_units_left",
+          "name": "Wall Units Left (WALL UNIT 1-6)",
+          "category": "FLOOR",
+          "cameras": ["zone.mp4"],
+          "adjacent_zones": ["zone_entry", "zone_makeup_units", "zone_billing"]
+        },
+        {
+          "zone_id": "zone_wall_units_right",
+          "name": "Wall Units Right (WALL UNIT 7-13)",
+          "category": "FLOOR",
+          "cameras": ["zone.mp4"],
+          "adjacent_zones": ["zone_entry", "zone_makeup_units", "zone_billing"]
+        },
+        {
+          "zone_id": "zone_makeup_units",
+          "name": "Makeup Units (centre-right)",
+          "category": "FLOOR",
+          "cameras": ["zone.mp4"],
+          "adjacent_zones": ["zone_wall_units_left", "zone_wall_units_right", "zone_billing"]
+        },
+        {
+          "zone_id": "zone_billing",
+          "name": "Cash Counter / Billing",
+          "category": "BILLING",
+          "cameras": ["billing_area.mp4"],
+          "adjacent_zones": ["zone_wall_units_left", "zone_wall_units_right", "zone_makeup_units"]
+        }
+      ]
+    }
+  ]
+}

@@ -130,6 +130,20 @@ Three design decisions were shaped in direct collaboration with the LLM and are 
 
 **Decision:** Adopted. This reduced Re-ID inference from O(tracks × frames) to O(unique_tracks), making CPU-only inference viable. The trade-off is that if a person changes appearance drastically mid-track (e.g., removes a jacket), the Re-ID embedding will be stale — acceptable for a retail session of 10–60 minutes where appearance is generally stable.
 
+### 4. Dual-schema tolerant ingest — adapting to the organiser's *shipped* event schema
+
+**Context the AI flagged:** The updated dataset ships a `sample_events.jsonl` whose schema does **not** match the PDF's page-5 "Required Output Schema" that our pipeline emits. The shipped rows use lowercase `event_type` (`entry`, `zone_entered`, `queue_completed`…), `id_token`/`track_id` instead of `visitor_id`, `event_timestamp`/`event_time`/`queue_join_ts` for time (and they are timezone-*naive*), carry no `event_id` or `confidence`, and add rich detection fields (`gender_pred`, `age_pred`, `group_id`, `zone_type`, `is_revenue_zone`, `zone_hotspot_x/y`, `wait_seconds`, `queue_position_at_join`). Our `EventIn` model rejected every line of it.
+
+**Options weighed (with AI):** (a) keep only the canonical schema and treat the shipped file as a detection reference; (b) re-target the whole API to the shipped schema; (c) a *normalization layer* in front of validation that accepts both. The held-out event set in Part B is most plausibly in the shipped shape (it is the only concrete event artifact the organiser provides), so option (a) risked the 20-point API-correctness block; option (b) discarded a working, tested build for a still-ambiguous target.
+
+**Decision:** Adopted (c) — `services/api/models/normalize.py::normalize_event` maps the shipped shape onto the canonical one and returns canonical/unknown rows unchanged, so the existing per-event partial-success path is untouched. Two judgement calls where I overrode the naive mapping: (1) **billing zones collapse to the literal `zone_billing`** because the analytics SQL matches on that exact value — a faithful pass-through of `PURPLLE_MUM_1076_Z_BILLING_01` would have silently zeroed conversion/funnel/queue metrics; (2) **`event_id` is derived deterministically** (`uuid5` over identity fields, or the row's own `queue_event_id`) rather than randomly, so re-POSTing a shipped batch is still idempotent. `queue_position_at_join` is mapped to `metadata.queue_depth`; `confidence` defaults to `0.9` (we never drop low-confidence rows, per the scoring rubric).
+
+### 5. VLM-assisted zone extraction from the floor-plan PNGs
+
+**Context:** The updated drop replaced the machine-readable layout (xlsx/JSON) with **architectural floor-plan images** (`Store 1 - layout.png`, `store 2 - layout.png`) for two stores with different camera roles. Zone names had to be read off the drawings.
+
+**Prompt used (Claude vision):** *"This is a retail store floor plan. List every labelled fixture/brand block, the cash-counter location, and the entrance. Group them into ENTRY, FLOOR, and BILLING zones and return JSON with zone_id, name, category, and which of these camera clips most likely covers each: [clip filenames]."* The model correctly grouped the wall shelves, makeup units and cash counter; **I overrode** its tendency to make each individual brand its own zone (too granular for the 3–4 camera angles available) and merged them into camera-aligned floor zones. Result captured in `data/mock/real_store_layouts.json`. Pixel polygons for tracking are still calibrated per-camera against real frames (`scripts/calibrate.py`) — the VLM gave us the semantic zone map, not geometry.
+
 ---
 
 ## Trade-offs Summary

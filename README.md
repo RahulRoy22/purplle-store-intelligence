@@ -44,6 +44,37 @@ API docs (Swagger UI): http://localhost:8000/docs
 
 ---
 
+## Working with the Updated Organiser Dataset
+
+The updated drop (`updated data/`) contains **two stores** (`Store 1`, `Store 2`) with per-store
+camera roles, PNG floor-plan layouts, a trimmed POS CSV, and a `sample_events.jsonl` whose schema
+differs from the canonical one. The system handles all of this without code changes on your part:
+
+- **Dual-schema event ingest.** `POST /events/ingest` accepts **both** the canonical schema *and*
+  the organiser's shipped detection schema (lowercase `entry`/`zone_entered`/`queue_completed`,
+  `id_token`/`track_id`, naive timestamps, `gender_pred`/`age_pred`/`queue_position_at_join`, …).
+  `services/api/models/normalize.py` maps the shipped shape onto the canonical one before
+  validation — billing zones collapse to `zone_billing`, and a deterministic `event_id` keeps
+  re-ingestion idempotent. You can POST the organiser's `sample_events.jsonl` lines directly:
+  ```bash
+  # batch the shipped sample (≤500 per request) straight into the API
+  curl -s -X POST http://localhost:8000/events/ingest \
+       -H 'Content-Type: application/json' \
+       -d "{\"events\": $(python -c 'import json,sys; print(json.dumps([json.loads(l) for l in open("updated data/sample_eventsbe42122.jsonl") if l.strip()]))')}"
+  ```
+- **Real POS CSV.** `load_pos_from_csv` (in `services/api/main.py`) auto-detects the organiser
+  schema (`order_id` header), combines `order_date` + `order_time`, treats them as IST (UTC+5:30),
+  and stores UTC ISO-8601 — point `POS_CSV_PATH` at the new CSV and it just loads.
+- **Two-store zone maps.** `data/mock/real_store_layouts.json` holds the ENTRY/FLOOR/BILLING zone
+  definitions for both stores (derived from the floor-plan PNGs — see DESIGN.md "AI-Assisted
+  Decisions"), with each zone mapped to its covering camera clip.
+  `data/mock/calibration_updated/` holds first-pass per-camera `pixel_polygon` layouts (entry +
+  floor + billing per store) ready for `ZoneMapper`; refine vertices with `scripts/calibrate.py`.
+
+`STORE_BLR_002` remains the canonical, always-seeded store the acceptance gate queries.
+
+---
+
 ## Running the Detection Pipeline
 
 The CV pipeline processes CCTV footage and streams events to the API. It requires Python 3.11+ and the pipeline dependencies.
@@ -126,6 +157,20 @@ DB_PATH=/data/store_intelligence.db \
 API_URL=http://localhost:8000 \
 python main.py
 ```
+
+**Against the updated two-store footage** (e.g. Store 1 entry camera). The pipeline is
+camera-agnostic — it is driven by the zone map, so you only point it at the clip and a layout:
+```bash
+cd services/pipeline
+VIDEO_SOURCE="../../updated data/Store 1-20260602T101818Z-3-001ec38db8/Store 1/CAM 3 - entry.mp4" \
+CAMERA_ID="CAM 3 - entry" \
+STORE_ID=STORE_BLR_002 \
+API_URL=http://localhost:8000 \
+python main.py
+```
+Emitted events flow through the same `/events/ingest` endpoint and are tagged with `STORE_ID`
+(keep `STORE_BLR_002` for the scored demo). Zone definitions for both stores are in
+`data/mock/real_store_layouts.json`.
 
 ---
 
