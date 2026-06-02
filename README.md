@@ -2,6 +2,11 @@
 
 Real-time CCTV analytics pipeline for retail stores. Detects visitors via YOLOv8, tracks them with ByteTrack, re-identifies across frames with OSNet, maps positions to store zones, and streams structured events to a FastAPI analytics API backed by SQLite.
 
+**Live demo:** https://purplle-store-intelligence-9meb.onrender.com/dashboard
+**API docs:** https://purplle-store-intelligence-9meb.onrender.com/docs
+
+> Note: hosted on Render free tier — first load after inactivity takes ~30 seconds to wake up.
+
 ---
 
 ## Quick Start (API + Mock Data)
