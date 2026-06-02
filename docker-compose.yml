@@ -36,9 +36,12 @@ services:
       - LOG_LEVEL=INFO
       - STORE_ID=STORE_BLR_002
       - STALE_FEED_THRESHOLD_MINUTES=10
-      # Switch from the mock CSV to the real organiser-provided POS data.
-      # Comment out or set to "" to fall back to the seeded mock data.
-      - POS_CSV_PATH=/data/resource/pos_transactions.csv
+      # POS source. Default = the seeded, billing-correlated mock CSV so
+      # `docker compose up` shows a coherent, computed conversion_rate on ANY
+      # machine (the real organiser POS is a different store/date and would
+      # correlate to 0). To use the real organiser POS instead, point this at
+      # /data/resource/pos_transactions.csv (gitignored; present locally only).
+      - POS_CSV_PATH=/data/generated/pos_transactions.csv
     depends_on:
       seed:
         condition: service_completed_successfully

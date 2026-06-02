@@ -34,6 +34,11 @@ data/generated/
 # These contain proprietary footage and organiser data — never commit
 data/resource/
 
+# Organiser "updated data" drop (licensed footage/PDF/sample data — never commit).
+# The .mp4s are already covered by *.mp4, but this also excludes the PDF, PNG
+# layouts, sample_events.jsonl and POS CSV which must not be published.
+updated data/
+
 # Video files (anywhere in the tree)
 *.mp4
 *.avi
