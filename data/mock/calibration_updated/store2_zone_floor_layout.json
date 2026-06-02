@@ -1,28 +1,27 @@
 {
-  "_note": "APPROXIMATE first-pass polygons drafted from an extracted frame (AI-assisted, Path B). Refine vertices with: python scripts/calibrate.py --video <clip> --output <this file> --frame 1449. Resolution: Store 1 cams=1920x1080, Store 2 cams=960x1080.",
   "camera_id": "zone",
   "source_video": "zone.mp4",
   "frame_index": 1449,
   "zones": [
     {
       "zone_id": "zone_makeup_units",
-      "name": "Centre Floor / Wall Units",
+      "name": "Floor",
       "pixel_polygon": [
         [
-          200,
-          380
+          19,
+          54
         ],
         [
-          760,
-          370
+          940,
+          31
         ],
         [
-          800,
-          950
+          943,
+          796
         ],
         [
-          180,
-          960
+          32,
+          854
         ]
       ]
     }

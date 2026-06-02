@@ -1,28 +1,35 @@
 {
-  "_note": "APPROXIMATE first-pass polygons drafted from an extracted frame (AI-assisted, Path B). Refine vertices with: python scripts/calibrate.py --video <clip> --output <this file> --frame 1732. Resolution: Store 1 cams=1920x1080, Store 2 cams=960x1080.",
   "camera_id": "CAM 5 - billing",
   "source_video": "CAM 5 - billing.mp4",
   "frame_index": 1732,
   "zones": [
     {
       "zone_id": "zone_billing",
-      "name": "Cash Counter / Billing",
+      "name": "Billing",
       "pixel_polygon": [
         [
-          110,
-          230
+          508,
+          249
         ],
         [
-          1040,
-          210
+          221,
+          441
         ],
         [
-          1080,
-          1000
+          0,
+          849
         ],
         [
-          150,
-          1020
+          30,
+          1058
+        ],
+        [
+          1039,
+          1070
+        ],
+        [
+          1116,
+          496
         ]
       ]
     }

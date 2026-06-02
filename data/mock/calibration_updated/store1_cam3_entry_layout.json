@@ -1,5 +1,4 @@
 {
-  "_note": "APPROXIMATE first-pass polygons drafted from an extracted frame (AI-assisted, Path B). Refine vertices with: python scripts/calibrate.py --video <clip> --output <this file> --frame 2218. Resolution: Store 1 cams=1920x1080, Store 2 cams=960x1080.",
   "camera_id": "CAM 3 - entry",
   "source_video": "CAM 3 - entry.mp4",
   "frame_index": 2218,
@@ -9,20 +8,24 @@
       "name": "Store Entry / Exit",
       "pixel_polygon": [
         [
-          770,
-          150
+          168,
+          24
         ],
         [
-          1480,
-          150
+          479,
+          1074
         ],
         [
-          1440,
-          580
+          1023,
+          1070
         ],
         [
-          700,
-          560
+          1492,
+          387
+        ],
+        [
+          1445,
+          7
         ]
       ]
     }
