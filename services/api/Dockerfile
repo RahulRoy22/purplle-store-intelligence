@@ -49,6 +49,7 @@ COPY data/mock/ ./data/mock/
 RUN mkdir -p data/generated \
  && python data/mock/generate_store_layout.py \
  && python data/mock/generate_sample_events.py \
+ && python data/mock/generate_extra_stores.py \
  && python data/mock/generate_pos_transactions.py
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
