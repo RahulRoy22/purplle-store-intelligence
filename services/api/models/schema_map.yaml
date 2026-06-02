@@ -1,0 +1,69 @@
+# schema_map.yaml — externalised field mappings for dual-schema ingest.
+#
+# Purpose
+# -------
+# When a future dataset arrives in a NEW shape, you extend the mapping HERE
+# (a config edit) instead of changing code. `models/normalize.py` loads this
+# file at import; if the file or PyYAML is missing it falls back to identical
+# built-in defaults, so the API never hard-depends on it.
+#
+# What this does NOT do: it cannot invent zone pixel-polygons for new camera
+# angles (that needs calibration), and it deliberately does not auto-guess
+# unknown fields — unmapped rows are rejected/skipped and logged, never stored
+# wrong. Add the mapping explicitly below.
+
+events:
+  # Shipped lowercase event_type  ->  canonical UPPERCASE event_type
+  type_map:
+    entry: ENTRY
+    exit: EXIT
+    zone_entered: ZONE_ENTER
+    zone_exited: ZONE_EXIT
+    zone_dwell: ZONE_DWELL
+    queue_completed: BILLING_QUEUE_JOIN
+    queue_abandoned: BILLING_QUEUE_ABANDON
+    reentry: REENTRY
+
+  # First present wins, in order. Maps a source field -> canonical field.
+  visitor_id_fields: [id_token, visitor_id]      # track_id handled specially -> "track_<id>"
+  timestamp_fields:  [timestamp, event_timestamp, event_time, queue_join_ts]
+  store_id_fields:   [store_id, store_code]
+
+  # Source fields copied verbatim into metadata when present.
+  metadata_carry:
+    - gender
+    - gender_pred
+    - age
+    - age_pred
+    - age_bucket
+    - group_id
+    - group_size
+    - is_face_hidden
+    - is_revenue_zone
+    - zone_name
+    - zone_type
+    - zone_hotspot_x
+    - zone_hotspot_y
+    - wait_seconds
+    - queue_position_at_join
+    - queue_served_ts
+    - queue_exit_ts
+    - abandoned
+    - camera_id
+
+  default_confidence: 0.9
+
+pos:
+  # Organiser CSV is detected by the presence of this header column.
+  organiser_marker_column: order_id
+  # Date+time formats tried in order when combining order_date + order_time.
+  datetime_formats:
+    - "%d/%m/%Y %H:%M:%S"
+    - "%d-%m-%Y %H:%M:%S"
+    - "%Y-%m-%d %H:%M:%S"
+    - "%d/%m/%Y %H:%M"
+    - "%d-%m-%Y %H:%M"
+    - "%Y-%m-%d %H:%M"
+    - "%d/%m/%Y"
+    - "%d-%m-%Y"
+    - "%Y-%m-%d"

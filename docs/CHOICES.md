@@ -223,6 +223,13 @@ I rejected both halves and settled on **one event per zone transition, with staf
 
 **Decision status:** Stable. Implemented across `state_machine.py` (transition synthesis) and the API's read-time `is_staff = 0` filter.
 
+**Addendum — accepting the organiser's *shipped* schema (dual-schema ingest)**
+
+The updated dataset's `sample_events.jsonl` does not use the canonical schema above — it uses lowercase event types, `id_token`/`track_id`, naive timestamps, and rich detection fields (`gender_pred`, `age_pred`, `group_id`, `zone_type`, `is_revenue_zone`, `zone_hotspot_x/y`, `wait_seconds`, `queue_position_at_join`). Because the Part-B held-out event set is most plausibly in *that* shape, the schema decision is no longer just "what we emit" but "what we accept."
+
+- **Options:** (a) canonical-only, treat the shipped file as reference; (b) re-target the whole API to the shipped schema; (c) a normalization adapter accepting both. I chose **(c)** — `models/normalize.py::normalize_event` — because (a) risked the 20-point ingest block on the organiser's own example file, and (b) threw away a tested build for a still-ambiguous target. The AI initially leaned toward (b) ("just match their file"); I **overrode** it: a thin, pure normalizer in front of `EventIn` de-risks both interpretations at a fraction of the blast radius, and leaves `batch_upsert`, the 207 partial-success path, and the analytics SQL untouched.
+- **Two non-obvious mapping rules:** billing zones (e.g. `PURPLLE_MUM_1076_Z_BILLING_01`) **collapse to the literal `zone_billing`** the analytics match on — a faithful pass-through would have silently zeroed conversion/funnel/queue; and `event_id` is **derived deterministically** (`uuid5`, or the row's own `queue_event_id`) so re-POSTing a shipped batch stays idempotent rather than inflating counts. `queue_position_at_join → metadata.queue_depth`; missing `confidence → 0.9` (never dropped).
+
 ---
 
 ### Decision 7: Staff classifier is a fixed HSV uniform mask — a deliberate, replaceable shortcut

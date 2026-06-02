@@ -13,6 +13,7 @@ import aiosqlite
 from core.config import get_settings
 from db.events import batch_upsert
 from models.event import EventIn
+from models.normalize import normalize_event
 from pydantic import ValidationError
 from routers import health, ingest, stores, dashboard
 
@@ -113,10 +114,12 @@ async def init_db(db_path: str) -> None:
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
-# Date+time format strings tried in order when parsing the organiser CSV.
-# The organiser format is typically "DD/MM/YYYY" + "HH:MM:SS", but we cover
-# common variants so a format change in a future dataset doesn't re-break us.
-_DATETIME_FORMATS = [
+# Date+time format strings tried in order when parsing the organiser CSV, plus
+# the header column that marks the organiser schema. Both are loaded from
+# models/schema_map.yaml so a future format/column change is a config edit, not
+# a code change; the built-in defaults below are the authoritative fallback if
+# the config file (or PyYAML) is unavailable.
+_DEFAULT_DATETIME_FORMATS = [
     "%d/%m/%Y %H:%M:%S",
     "%d-%m-%Y %H:%M:%S",
     "%Y-%m-%d %H:%M:%S",
@@ -127,6 +130,25 @@ _DATETIME_FORMATS = [
     "%d-%m-%Y",
     "%Y-%m-%d",
 ]
+_DEFAULT_ORGANISER_MARKER = "order_id"
+
+
+def _load_pos_config() -> tuple[list[str], str]:
+    try:
+        import yaml
+        cfg_path = pathlib.Path(__file__).parent / "models" / "schema_map.yaml"
+        if cfg_path.exists():
+            pos = (yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}).get("pos", {}) or {}
+            return (
+                pos.get("datetime_formats") or _DEFAULT_DATETIME_FORMATS,
+                pos.get("organiser_marker_column") or _DEFAULT_ORGANISER_MARKER,
+            )
+    except Exception:
+        pass
+    return _DEFAULT_DATETIME_FORMATS, _DEFAULT_ORGANISER_MARKER
+
+
+_DATETIME_FORMATS, _ORGANISER_MARKER = _load_pos_config()
 
 
 def _parse_organiser_timestamp(date_val: str, time_val: str) -> str:
@@ -205,7 +227,7 @@ async def load_pos_from_csv(db_path: str, csv_path: str) -> int:
         # Excel-exported CSVs from Indian retail systems)
         with p.open(newline="", encoding="utf-8-sig") as f:
             reader = csv.DictReader(f)
-            is_organiser_schema = "order_id" in (reader.fieldnames or [])
+            is_organiser_schema = _ORGANISER_MARKER in (reader.fieldnames or [])
 
             if is_organiser_schema:
                 logger.info("POS CSV: detected organiser schema (order_id column)")
@@ -290,7 +312,7 @@ async def load_events_from_jsonl(db_path: str, jsonl_path: str) -> int:
             if not line:
                 continue
             try:
-                valid.append(EventIn.model_validate_json(line))
+                valid.append(EventIn.model_validate(normalize_event(json.loads(line))))
             except (ValidationError, ValueError) as exc:
                 skipped += 1
                 logger.warning(

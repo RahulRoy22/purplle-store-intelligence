@@ -7,6 +7,11 @@ A self-contained HTML page (Bootstrap 5 + vanilla JS) that renders:
   - Zone heatmap     (heat-coloured bars + data_confidence badge)
   - Anomaly panel    (severity-coded cards with suggested_action)
 
+A navbar **store selector** (populated from `/health`'s per-store list) lets one
+dashboard serve any number of stores — switching re-fetches every panel and
+re-subscribes the live stream for the chosen store, so a 40-store chain isn't
+crammed into one cluttered view.
+
 No external build step, no React, no webpack — just one HTML response.
 The JS subscribes to the SSE stream (`GET /stores/{id}/stream`) and refreshes
 on every push; no polling interval is used.
@@ -37,6 +42,9 @@ _HTML = """<!DOCTYPE html>
   .navbar { background: linear-gradient(90deg, #1a003a 0%, #0f0f1a 100%); border-bottom: 1px solid var(--card-border); }
   .navbar-brand { color: var(--purple-light) !important; font-weight: 700; letter-spacing: .5px; }
   .badge-store { background: #2d1b69; color: var(--purple-light); padding: 4px 10px; border-radius: 20px; font-size: .8rem; }
+  .store-select { background: #2d1b69; color: var(--purple-light); border: 1px solid var(--card-border); border-radius: 20px; padding: 4px 12px; font-size: .8rem; outline: none; cursor: pointer; }
+  .store-select:focus { border-color: var(--purple-light); }
+  .store-select option { background: var(--card-bg); color: #e2e8f0; }
   .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
   .status-dot.ok { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
   .status-dot.bad { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
@@ -82,7 +90,8 @@ _HTML = """<!DOCTYPE html>
 <nav class="navbar navbar-dark px-4 py-3 mb-4">
   <span class="navbar-brand">&#9679; Purplle Store Intelligence</span>
   <div class="d-flex align-items-center gap-3">
-    <span class="badge-store" id="store-badge">store: —</span>
+    <label class="visually-hidden" for="store-select">Store</label>
+    <select id="store-select" class="store-select" title="Select store"></select>
     <span id="api-status"><span class="status-dot bad" id="status-dot"></span><span id="status-text" class="small">connecting…</span></span>
     <span id="last-updated">—</span>
     <div class="spinner-border spinner-sm text-secondary d-none" id="spinner" role="status"></div>
@@ -167,9 +176,11 @@ _HTML = """<!DOCTYPE html>
 </div>
 
 <script>
-const STORE_ID = "STORE_ID_PLACEHOLDER";
-
-document.getElementById("store-badge").textContent = "store: " + STORE_ID;
+// Configured default store (always selectable, even before it has events).
+const DEFAULT_STORE = "STORE_ID_PLACEHOLDER";
+// Currently-viewed store — mutable; driven by the navbar selector.
+let currentStore = DEFAULT_STORE;
+let evtSource = null;
 
 function fmtMs(ms) {
   if (ms == null) return "—";
@@ -276,10 +287,10 @@ async function refresh() {
   spinner.classList.remove("d-none");
   try {
     const [m, f, h, a, health] = await Promise.all([
-      fetchJSON(`/stores/${STORE_ID}/metrics`),
-      fetchJSON(`/stores/${STORE_ID}/funnel`),
-      fetchJSON(`/stores/${STORE_ID}/heatmap`),
-      fetchJSON(`/stores/${STORE_ID}/anomalies`),
+      fetchJSON(`/stores/${currentStore}/metrics`),
+      fetchJSON(`/stores/${currentStore}/funnel`),
+      fetchJSON(`/stores/${currentStore}/heatmap`),
+      fetchJSON(`/stores/${currentStore}/anomalies`),
       fetchJSON("/health"),
     ]);
 
@@ -305,20 +316,43 @@ async function refresh() {
   }
 }
 
-refresh();
+// Real-time updates via Server-Sent Events — (re)subscribed per selected store.
+function subscribeSSE() {
+  if (evtSource) { evtSource.close(); }
+  evtSource = new EventSource(`/stores/${currentStore}/stream`);
+  evtSource.onmessage = (e) => {
+    const payload = JSON.parse(e.data);
+    if (payload.new_events > 0) { refresh(); }
+  };
+  evtSource.onerror = () => {
+    console.warn("SSE stream closed, reconnecting in 5s…");
+    document.getElementById("status-dot").className = "status-dot bad";
+    document.getElementById("status-text").textContent = "reconnecting…";
+    setTimeout(subscribeSSE, 5000);   // keep the selected store, don't full-reload
+  };
+}
 
-// Real-time updates via Server-Sent Events — no polling interval needed
-const evtSource = new EventSource(`/stores/${STORE_ID}/stream`);
-evtSource.onmessage = (e) => {
-  const payload = JSON.parse(e.data);
-  if (payload.new_events > 0) {
-    refresh();
-  }
-};
-evtSource.onerror = () => {
-  console.warn("SSE stream closed, reconnecting in 5s…");
-  setTimeout(() => location.reload(), 5000);
-};
+// Populate the store selector from /health's per-store list. The configured
+// default is always included so the page is never storeless.
+async function populateStores() {
+  const sel = document.getElementById("store-select");
+  let stores = [];
+  try {
+    const health = await fetchJSON("/health");
+    stores = (health.stores || []).map(s => s.store_id).filter(Boolean);
+  } catch (e) { /* health unavailable — fall back to default only */ }
+  if (!stores.includes(DEFAULT_STORE)) stores.unshift(DEFAULT_STORE);
+  stores = [...new Set(stores)];
+  sel.innerHTML = stores.map(s => `<option value="${s}">${s}</option>`).join("");
+  sel.value = currentStore;
+  sel.onchange = () => { currentStore = sel.value; refresh(); subscribeSSE(); };
+}
+
+(async () => {
+  await populateStores();
+  refresh();
+  subscribeSSE();
+})();
 </script>
 </body>
 </html>

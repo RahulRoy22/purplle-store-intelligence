@@ -24,6 +24,7 @@ from pydantic import BaseModel, ValidationError
 from core.config import get_settings
 from db.events import batch_upsert
 from models.event import EventIn
+from models.normalize import normalize_event
 from routers.stores import notify_store_subscribers
 
 router = APIRouter()
@@ -65,7 +66,10 @@ async def ingest_events(request: Request, payload: IngestRequest) -> JSONRespons
 
     for idx, raw in enumerate(payload.events):
         try:
-            event = EventIn.model_validate(raw)
+            # Accept either the canonical schema or the organiser's shipped
+            # detection schema — normalize_event maps the latter onto the former
+            # (and returns canonical/unknown rows unchanged) before validation.
+            event = EventIn.model_validate(normalize_event(raw))
             valid_events.append(event)
         except ValidationError as exc:
             first_error = exc.errors(include_url=False)[0]
