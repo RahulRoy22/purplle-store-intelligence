@@ -43,4 +43,12 @@ FROM base AS production
 
 COPY services/api/ .
 
+# Bake seed data into the image so Render (no persistent disk, no pre-deploy
+# command on free tier) always boots with events + POS already generated.
+COPY data/mock/ ./data/mock/
+RUN mkdir -p data/generated \
+ && python data/mock/generate_store_layout.py \
+ && python data/mock/generate_sample_events.py \
+ && python data/mock/generate_pos_transactions.py
+
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
